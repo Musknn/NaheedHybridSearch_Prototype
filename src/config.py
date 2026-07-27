@@ -14,7 +14,8 @@ INDEX_DIR = os.path.join(BASE_DIR, "indexes")
 
 # The real, full product dump from the mentor team.
 CATALOGUE_PATH = os.path.join(RAW_DIR, "AllProducts.csv")
-
+EVAL_DIR = os.path.join(DATA_DIR, "evaluation")
+HELD_OUT_EVAL_PATH = os.path.join(EVAL_DIR, "held_out_eval_v2.csv")
 # Small hand-made catalogue kept around for fast smoke tests / demos
 # that don't need the full 155k-row file.
 SAMPLE_CATALOGUE_PATH = os.path.join(SAMPLES_DIR, "sample_catalogue.csv")

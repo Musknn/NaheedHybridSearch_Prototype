@@ -61,20 +61,32 @@ class SearchRequest(BaseModel):
     query: str = Field(..., description="The user's search query (any language)")
     top_k: int = Field(default=5, ge=1, le=100, description="Number of final results to return")
 
-    # --- Metadata filters (all optional) ---
+    # --- Metadata filters ---
     in_stock: Optional[bool] = Field(default=None, description="Filter to in-stock products only")
-    category: Optional[str] = Field(default=None, description="Filter by category (matches any level in category_path)")
-    brand: Optional[str] = Field(default=None, description="Filter by brand name (case-insensitive)")
-    min_price: Optional[float] = Field(default=None, ge=0, description="Minimum price filter")
-    max_price: Optional[float] = Field(default=None, ge=0, description="Maximum price filter")
+    category: Optional[str] = Field(default=None)
+    brand: Optional[str] = Field(default=None)
+    min_price: Optional[float] = Field(default=None, ge=0)
+    max_price: Optional[float] = Field(default=None, ge=0)
 
     # --- Pipeline controls ---
-    bm25_candidates: int = Field(default=60, description="Number of BM25 candidates for Stage 1")
-    vector_candidates: int = Field(default=60, description="Number of vector candidates for Stage 1")
-    rrf_k: int = Field(default=40, description="RRF constant k (standard=60)")
-    mmr_lambda: float = Field(default=0.5, ge=0.0, le=1.0, description="MMR λ: 1.0=pure relevance, 0.0=pure diversity")
-    mmr_candidates: int = Field(default=30, description="Number of candidates after MMR filtering")
-    use_reranker: bool = Field(default=True, description="Whether to apply cross-encoder reranking (slower but more precise)")
+    bm25_candidates: int = Field(default=300, description="Number of BM25 candidates for Stage 1")
+    vector_candidates: int = Field(default=300, description="Number of vector candidates for Stage 1")
+    rrf_k: int = Field(default=60, description="RRF constant k (standard=60)")
+    rrf_alpha: float = Field(default=0.6, ge=0.0, le=1.0, description="Weight for Vector results in WRRF")
+    mmr_lambda: float = Field(default=0.8, ge=0.0, le=1.0)
+    mmr_candidates: int = Field(default=30, description="Number of candidates passed to Stage 2")
+    use_reranker: bool = Field(default=True, description="Master toggle for cross-encoder reranking")
+    
+    # ── CONDITIONAL RERANKING CONTROLS ──
+    conditional_rerank: bool = Field(
+        default=True, 
+        description="Skip reranker if Stage 1 confidence is high"
+    )
+    confidence_threshold: float = Field(
+        default=1.0, 
+        ge=0.0, le=1.0, 
+        description="Fraction of max theoretical WRRF score to trigger high confidence"
+    )
 
 
 class SearchResult(BaseModel):
@@ -111,6 +123,7 @@ _resources: dict = {}
 
 def _get_resources() -> dict:
     """Lazy-load all indexes and models on first call."""
+    print(f"DEBUG: _get_resources called. Cache status: {bool(_resources)}")
     if _resources:
         return _resources
 
@@ -142,7 +155,8 @@ def _get_resources() -> dict:
     _resources["embed_model"] = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
     # --- Cross-encoder reranker (loaded lazily on first rerank call) ---
-    _resources["reranker"] = None  # loaded on demand
+    print("Pre-loading reranker...")
+    _resources["reranker"] = CrossEncoder(RERANKER_MODEL_NAME)
 
     print(f"  Resources loaded in {time.perf_counter() - t0:.1f}s")
     return _resources
@@ -157,7 +171,10 @@ def _get_reranker() -> CrossEncoder:
         print("  Reranker loaded.")
     return res["reranker"]
 
-
+def get_embed_model() -> SentenceTransformer:
+    """Shared accessor so other modules (evaluation.py) reuse this loaded
+    instance instead of loading a second copy of the same model."""
+    return _get_resources()["embed_model"]
 # ═══════════════════════════════════════════════════════════════════════════
 # Metadata filtering
 # ═══════════════════════════════════════════════════════════════════════════
@@ -254,73 +271,81 @@ def vector_search(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def reciprocal_rank_fusion(
-    *ranked_lists: list[tuple[str, float]],
-    k: int = 60,
-) -> list[tuple[str, float]]:
-    """
-    Merge multiple ranked lists using Reciprocal Rank Fusion.
-
-    RRF_score(d) = Σ  1 / (k + rank_i(d))
-
-    where rank_i(d) is the 1-based rank of document d in ranked list i.
-    Documents not present in a list receive no contribution from that list
-    (equivalent to rank = infinity).
-
-    Args:
-        *ranked_lists: Variable number of ranked lists, each a list of
-                       (id, score) tuples sorted by score descending.
-        k: RRF constant (standard = 60). Higher k reduces the influence
-           of high-ranked documents.
-
-    Returns:
-        List of (id, rrf_score) tuples sorted by RRF score descending.
-    """
-    rrf_scores: dict[str, float] = {}
-
-    for ranked_list in ranked_lists:
-        for rank, (doc_id, _score) in enumerate(ranked_list, start=1):
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (k + rank)
-
-    # Sort by RRF score descending
-    fused = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
-    return fused
-
-def weighted_score_fusion(
+def weighted_reciprocal_rank_fusion(
     vector_results: list[tuple[str, float]],
     bm25_results: list[tuple[str, float]],
+    k: int = 60,
     alpha: float = 0.4,
 ) -> list[tuple[str, float]]:
     """
-    Merge vector and BM25 results via a normalized weighted sum:
-
-        final_score = alpha * norm_vector_score + (1 - alpha) * norm_bm25_score
-
-    Each score list is independently min-max normalized to [0, 1] first —
-    raw BM25 scores are unbounded while cosine scores are already roughly
-    bounded, so normalizing puts them on a comparable scale before applying
-    alpha. Documents missing from one list score 0 on that side.
+    Merge vector and BM25 results using Weighted Reciprocal Rank Fusion (WRRF).
+    
+    This ignores the raw, unpredictable scores and relies purely on rank position,
+    applying an alpha weight to prioritize one retrieval method over the other.
+    
+    Formula:
+    WRRF_score(d) = [α * (1 / (k + rank_vector(d)))] + [(1 - α) * (1 / (k + rank_bm25(d)))]
+    
+    Args:
+        vector_results: List of (id, score) tuples from dense search, sorted descending.
+        bm25_results: List of (id, score) tuples from keyword search, sorted descending.
+        k: Smoothing constant to penalize low-ranked documents (standard = 60).
+        alpha: Weight assigned to Vector results (0.0 to 1.0). (1 - α) goes to BM25.
+        
+    Returns:
+        List of (id, wrrf_score) tuples sorted by the new combined score descending.
     """
-    def _normalize(results: list[tuple[str, float]]) -> dict[str, float]:
-        if not results:
-            return {}
-        scores = [s for _, s in results]
-        lo, hi = min(scores), max(scores)
-        if hi == lo:
-            return {doc_id: 1.0 for doc_id, _ in results}
-        return {doc_id: (s - lo) / (hi - lo) for doc_id, s in results}
+    wrrf_scores: dict[str, float] = {}
 
-    norm_vector = _normalize(vector_results)
-    norm_bm25 = _normalize(bm25_results)
+    def _add_to_fusion(ranked_list: list[tuple[str, float]], weight: float):
+        # enumerate(..., start=1) ensures rank is 1-indexed (1, 2, 3...)
+        for rank, (doc_id, _raw_score) in enumerate(ranked_list, start=1):
+            score_contribution = weight * (1.0 / (k + rank))
+            wrrf_scores[doc_id] = wrrf_scores.get(doc_id, 0.0) + score_contribution
 
-    all_ids = set(norm_vector) | set(norm_bm25)
-    fused = {
-        doc_id: alpha * norm_vector.get(doc_id, 0.0) + (1 - alpha) * norm_bm25.get(doc_id, 0.0)
-        for doc_id in all_ids
-    }
+    # Process dense results with the alpha weight (e.g., 0.4)
+    _add_to_fusion(vector_results, weight=alpha)
+    
+    # Process sparse results with the remaining weight (e.g., 0.6)
+    _add_to_fusion(bm25_results, weight=(1.0 - alpha))
 
-    return sorted(fused.items(), key=lambda x: x[1], reverse=True)
+    # Sort descending by the new WRRF score
+    fused = sorted(wrrf_scores.items(), key=lambda x: x[1], reverse=True)
+    return fused
 
+def _check_stage1_confidence(
+    fused_results: list[tuple[str, float]],
+    bm25_results: list[tuple[str, float]],
+    vector_results: list[tuple[str, float]],
+    k: int = 60,
+    threshold: float = 0.85,
+) -> tuple[bool, str]:
+    """
+    Evaluates whether Stage 1 retrieval produced a high-confidence match.
+
+    Returns:
+        (is_high_confidence: bool, reason: str)
+    """
+    if not fused_results:
+        return False, "no_candidates"
+
+    # Signal 1: Top-1 Agreement between BM25 and Vector search
+    top_bm25_id = bm25_results[0][0] if bm25_results else None
+    top_vector_id = vector_results[0][0] if vector_results else None
+
+    if top_bm25_id and top_vector_id and top_bm25_id == top_vector_id:
+        return True, f"top1_agreement (SKU: {top_bm25_id})"
+
+    # Signal 2: Maximum Theoretical WRRF Score Proximity
+    # Formula: alpha * (1/(k+1)) + (1-alpha) * (1/(k+1)) = 1 / (k + 1)
+    max_possible_score = 1.0 / (k + 1)
+    top_fused_score = fused_results[0][1]
+    score_ratio = top_fused_score / max_possible_score
+
+    if score_ratio >= threshold:
+        return True, f"high_score_ratio ({score_ratio:.2%} >= {threshold:.0%})"
+
+    return False, f"low_confidence (ratio={score_ratio:.2%})"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 2: Maximal Marginal Relevance (MMR)
@@ -331,7 +356,7 @@ def mmr_rerank(
     query: str,
     candidate_ids: list[str],
     top_k: int = 50,
-    lambda_param: float = 0.5,
+    lambda_param: float = 0.8,
 ) -> list[str]:
     """
     Apply Maximal Marginal Relevance to reduce redundancy.
@@ -496,11 +521,14 @@ def search(request: SearchRequest) -> SearchResponse:
     vector_results = vector_search(request.query, top_k=request.vector_candidates)
     timings["vector"] = time.perf_counter() - t0
 
-    # ── Stage 1c: RRF Fusion ──
+    # ── Stage 1c: WRRF Fusion ──
     t0 = time.perf_counter()
-    fused = weighted_score_fusion(vector_results, bm25_results, alpha=0.4)
+    # alpha=0.4 means BM25 gets 60% of the weight, Vector gets 40%
+    fused = weighted_reciprocal_rank_fusion(vector_results, bm25_results, alpha=0.4)
     timings["rrf"] = time.perf_counter() - t0
-    fused = fused[:100]          # <-- add this line
+    
+    # Optional: Safely truncate after fusion to speed up downstream filtering
+    fused = fused[:200]
     total_candidates = len(fused)
 
     # ── Metadata Filtering ──
@@ -523,18 +551,41 @@ def search(request: SearchRequest) -> SearchResponse:
     timings["mmr"] = time.perf_counter() - t0
 
     # ── Stage 2b: Cross-Encoder Reranking (optional) ──
+    skipped_reranker = False
+    skip_reason = ""
+
     if request.use_reranker and mmr_ids:
-        t0 = time.perf_counter()
-        reranked = cross_encoder_rerank(
-            query=request.query,
-            candidate_ids=mmr_ids,
-            top_k=request.top_k,
-        )
-        timings["reranker"] = time.perf_counter() - t0
-        final_ids_scores = reranked
+        # Check if Stage 1 confidence is high enough to bypass reranking
+        if request.conditional_rerank:
+            is_confident, skip_reason = _check_stage1_confidence(
+                fused_results=fused,
+                bm25_results=bm25_results,
+                vector_results=vector_results,
+                k=request.rrf_k,
+                threshold=request.confidence_threshold,
+            )
+            if is_confident:
+                skipped_reranker = True
+
+        if skipped_reranker:
+            # Skip the slow model and use the MMR top-k directly
+            timings["reranker"] = 0.0
+            final_ids_scores = [(cid, 0.0) for cid in mmr_ids[: request.top_k]]
+            print(f"⚡ [Conditional Rerank] SKIPPED Cross-Encoder ({skip_reason})")
+        else:
+            # Run Cross-Encoder for ambiguous / low-confidence queries
+            t0 = time.perf_counter()
+            reranked = cross_encoder_rerank(
+                query=request.query,
+                candidate_ids=mmr_ids,
+                top_k=request.top_k,
+            )
+            timings["reranker"] = time.perf_counter() - t0
+            final_ids_scores = reranked
+            print(f"🔍 [Conditional Rerank] EXECUTED Cross-Encoder ({skip_reason})")
     else:
-        # Without reranking, just take top_k from MMR order
         final_ids_scores = [(cid, 0.0) for cid in mmr_ids[: request.top_k]]
+        timings["reranker"] = 0.0
 
     # ── Build response ──
     results = []
@@ -579,7 +630,7 @@ def main() -> None:
     parser.add_argument("--brand", type=str, default=None, help="Brand filter")
     parser.add_argument("--min-price", type=float, default=None, help="Minimum price")
     parser.add_argument("--max-price", type=float, default=None, help="Maximum price")
-    parser.add_argument("--mmr-lambda", type=float, default=0.5, help="MMR λ (0=diversity, 1=relevance)")
+    parser.add_argument("--mmr-lambda", type=float, default=0.8, help="MMR λ (0=diversity, 1=relevance)")
     parser.add_argument("--no-rerank", action="store_true", help="Skip cross-encoder reranking")
     args = parser.parse_args()
 

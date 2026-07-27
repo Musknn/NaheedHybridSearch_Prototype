@@ -47,7 +47,7 @@ from typing import Optional
 import numpy as np
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
-
+from retrieval import get_embed_model as _get_shared_embed_model
 from config import EMBEDDING_MODEL_NAME, EVALUATION_MODEL_NAME
 import llm_client
 
@@ -85,11 +85,32 @@ class RelevancyResult(BaseModel):
     response: str
 
 
+class RetrievalMetricsResult(BaseModel):
+    """
+    Hit@K / MRR@K for a single query, when a known-correct product id is
+    available (e.g. from held_out_eval_v2.csv).
+
+    Unlike faithfulness/relevancy, this needs no LLM call and no embedding
+    call — it's a pure lookup against retrieved_ids, so it carries none of
+    the temperature=0.3 sampling noise that affects the other two metrics.
+    Use this whenever ground truth exists; fall back to faithfulness/
+    relevancy for live queries where there's no known-correct answer.
+    """
+
+    hit: bool = Field(description="True if expected_id appears anywhere in retrieved_ids")
+    reciprocal_rank: float = Field(ge=0.0, le=1.0, description="1/rank if found (1-indexed), else 0.0")
+    rank: Optional[int] = Field(default=None, description="1-indexed position of expected_id, if found")
+    expected_id: str
+    retrieved_ids: list[str]
+    top_k: int = Field(description="len(retrieved_ids) — i.e. K in Hit@K/MRR@K")
+
+
 class EvaluationResult(BaseModel):
     """Combined evaluation result."""
 
     faithfulness: Optional[FaithfulnessResult] = None
     relevancy: Optional[RelevancyResult] = None
+    retrieval: Optional[RetrievalMetricsResult] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -124,17 +145,24 @@ def call_llm(prompt: str) -> str:
 # Embedding model (lazy-loaded)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_embed_model: Optional[SentenceTransformer] = None
-
+# _embed_model: Optional[SentenceTransformer] = None
 
 def _get_embed_model() -> SentenceTransformer:
-    """Lazy-load the embedding model for relevancy scoring."""
-    global _embed_model
-    if _embed_model is None:
-        _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return _embed_model
+    """Reuse retrieval.py's already-loaded embedding model rather than
+    loading a second ~2.2GB copy for relevancy scoring."""
+    return _get_shared_embed_model()
 
+# Add this to evaluation.py
 
+def preload_evaluation_models():
+    """
+    Force the loading of heavy evaluation models into memory.
+    Call this ONCE before starting any batch process.
+    """
+    print("-> Pre-loading Evaluation Models...")
+    # This will populate the _embed_model global cache
+    _get_embed_model() 
+    print("-> Evaluation models loaded and cached.")
 # ═══════════════════════════════════════════════════════════════════════════
 # Faithfulness: Claim Extraction
 # ═══════════════════════════════════════════════════════════════════════════
@@ -396,6 +424,53 @@ def evaluate_relevancy(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Retrieval metrics: Hit@K / MRR@K (noise-free, needs ground truth)
+# ═══════════════════════════════════════════════════════════════════════════
+# Not from the Unit 10 lecture — these are standard IR metrics, included
+# here as the noise-free complement to faithfulness/relevancy. Use them
+# when you have a known-correct product id for a query (e.g. iterating
+# over held_out_eval_v2.csv); use faithfulness/relevancy for live queries
+# where no ground truth exists.
+
+
+def evaluate_retrieval_hit_mrr(
+    expected_id: str,
+    retrieved_ids: list[str],
+) -> RetrievalMetricsResult:
+    """
+    Compute Hit@K and reciprocal rank for a single query against a known-
+    correct product id, where K = len(retrieved_ids) (i.e. whatever top_k
+    you already searched with).
+
+    Args:
+        expected_id: The ground-truth correct product id for this query.
+        retrieved_ids: The ids actually returned by retrieval, in rank order
+                       (e.g. [r.id for r in search(request).results]).
+
+    Returns:
+        RetrievalMetricsResult with hit, reciprocal_rank, and rank (if found).
+    """
+    for rank, doc_id in enumerate(retrieved_ids, start=1):
+        if doc_id == expected_id:
+            return RetrievalMetricsResult(
+                hit=True,
+                reciprocal_rank=round(1.0 / rank, 4),
+                rank=rank,
+                expected_id=expected_id,
+                retrieved_ids=retrieved_ids,
+                top_k=len(retrieved_ids),
+            )
+    return RetrievalMetricsResult(
+        hit=False,
+        reciprocal_rank=0.0,
+        rank=None,
+        expected_id=expected_id,
+        retrieved_ids=retrieved_ids,
+        top_k=len(retrieved_ids),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Combined evaluation
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -405,22 +480,41 @@ def evaluate(
     response: str,
     context: str,
     n_questions: int = 3,
+    retrieved_ids: Optional[list[str]] = None,
+    expected_id: Optional[str] = None,
 ) -> EvaluationResult:
     """
-    Run both faithfulness and relevancy evaluations.
+    Run faithfulness and relevancy, and optionally Hit@K/MRR@K.
 
     Args:
         query: The original user query.
         response: The LLM-generated answer.
         context: The retrieved context (concatenated chunks).
         n_questions: Number of questions for relevancy (default 3).
+        retrieved_ids: The retrieved product ids in rank order, e.g.
+                       [r.id for r in search(request).results]. Optional —
+                       pass this together with expected_id to also get a
+                       noise-free retrieval metric (e.g. when running
+                       against held_out_eval_v2.csv, which has known-
+                       correct answers). Leave as None for live queries.
+        expected_id: The ground-truth correct product id for this query,
+                     if known. Must be passed together with retrieved_ids.
 
     Returns:
-        EvaluationResult with both faithfulness and relevancy scores.
+        EvaluationResult with faithfulness and relevancy always populated,
+        and retrieval populated only when both retrieved_ids and
+        expected_id were provided.
     """
     faith = evaluate_faithfulness(response=response, context=context)
     rel = evaluate_relevancy(query=query, response=response, n_questions=n_questions)
-    return EvaluationResult(faithfulness=faith, relevancy=rel)
+
+    retrieval_result = None
+    if retrieved_ids is not None and expected_id is not None:
+        retrieval_result = evaluate_retrieval_hit_mrr(
+            expected_id=expected_id, retrieved_ids=retrieved_ids
+        )
+
+    return EvaluationResult(faithfulness=faith, relevancy=rel, retrieval=retrieval_result)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
