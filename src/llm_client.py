@@ -49,8 +49,8 @@ from groq import Groq  # <--- Make sure this line is added!
 from config import GENERATION_MODEL_NAME
 
 def call_llm(prompt: str, model_name: str = GENERATION_MODEL_NAME, max_new_tokens: int = 256, temperature: float = 0.3) -> str:
-    # 1. Route to OpenAI (for evaluation.py judge)
-    if model_name.startswith("gpt-"):
+    # OpenAI's actual hosted API (not Groq's gpt-oss models)
+    if model_name.startswith("gpt-") or model_name.startswith("o1") or model_name.startswith("o3"):
         client = OpenAI()
         resp = client.chat.completions.create(
             model=model_name,
@@ -60,9 +60,9 @@ def call_llm(prompt: str, model_name: str = GENERATION_MODEL_NAME, max_new_token
         )
         return resp.choices[0].message.content.strip()
 
-    # 2. Route to Groq (for Llama / Mixtral / Gemma models)
-    elif "llama" in model_name.lower() or "gemma" in model_name.lower() or "mixtral" in model_name.lower():
-        client = Groq() # Auto-reads GROQ_API_KEY from environment
+    # Everything Groq hosts: Llama, Qwen, GPT-OSS, Mixtral, Gemma
+    elif any(p in model_name.lower() for p in ["llama", "gemma", "mixtral", "qwen", "gpt-oss"]):
+        client = Groq()
         resp = client.chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
@@ -71,7 +71,6 @@ def call_llm(prompt: str, model_name: str = GENERATION_MODEL_NAME, max_new_token
         )
         return resp.choices[0].message.content.strip()
 
-    # 3. Route to Google Gemini (Fallback if needed later)
     elif "gemini" in model_name.lower():
         client = genai.Client()
         resp = client.models.generate_content(
@@ -83,6 +82,7 @@ def call_llm(prompt: str, model_name: str = GENERATION_MODEL_NAME, max_new_token
             ),
         )
         return resp.text.strip()
+
 
 
 if __name__ == "__main__":

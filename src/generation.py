@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field
 
 from llm_client import call_llm
 from retrieval import SearchRequest, SearchResponse, SearchResult, search
+from router import classify_intent, extract_recipe, extract_price_filter, ExtractionError
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Prompt template
@@ -57,10 +58,11 @@ GENERATION_PROMPT = """You are a helpful shopping assistant for Naheed, a Pakist
 and supermarket chain. Answer the customer's question using ONLY the product 
 information listed below.
 
-IMPORTANT: The user may ask in Roman Urdu (e.g., "larkon ke glasses"). You MUST 
-mentally map these terms to the English product names or categories found in the 
-retrieved products (e.g., map "larkon" to "Men's" or "sunglasses"). 
-If a product matches the user's intent, confidently recommend it using the details provided.
+CRITICAL INSTRUCTIONS:
+1. Bilingual Mapping: The user may ask in Roman Urdu (e.g., "larkon ke glasses", "lal mirch"). You MUST mentally map these terms to the English product names, categories, or bilingual labels found in the retrieved products (e.g., map "larkon" to "Men's", or "lal mirch" to "Red Chilli").
+2. Ignore Brand Clutter: Look for the core item being requested, even if it is surrounded by brand names, weights, or packaging sizes (e.g., find "Ginger" within "Fresh Basket Ginger 250g").
+
+If a product matches the user's intent, confidently recommend it using the details provided. 
 
 Do not mention any product that is not listed below. If the listed products 
 don't contain the answer, say so honestly instead of guessing.
@@ -73,6 +75,29 @@ Customer question: {query}
 Answer:"""
 
 
+RECIPE_PROMPT = """You are a helpful shopping assistant for Naheed, a Pakistani pharmacy 
+and supermarket chain. The customer wants to cook {dish_name} and needs a shopping list.
+
+Below are the retrieved products for the requested ingredients. 
+
+CRITICAL MATCHING INSTRUCTIONS:
+1. Exhaustive Search: Carefully scan the ENTIRE product list for each required ingredient. 
+2. Ignore Brand Clutter: Match the core ingredient name even if it is hidden behind brand names, weights, or packaging types (e.g., match 'Ginger' or 'Adrak' to 'Fresh Basket Ginger (Adrak), 250g').
+3. Bilingual Mapping: Products may be listed in English, Roman Urdu, or both. You MUST check for both translations (e.g., check for both 'Mustard Oil' and 'Sarson Ka Tel', or 'Garlic' and 'Lehsan') before declaring an item missing.
+4. Do Not Skip: Do not skip any requested ingredients. If a highly relevant product is in the list, you must output it.
+
+If an ingredient truly has no match in the context after applying the rules above, say so honestly instead of guessing a substitute.
+
+Retrieved products (grouped by ingredient, ranked by relevance within each):
+{context}
+
+Customer question: {query}
+
+Write a friendly shopping list: one line per ingredient with the matched product 
+and price, then a total estimated cost at the end. If an ingredient wasn't found, 
+mention it clearly so the customer knows to source it elsewhere.
+
+Answer:"""
 # ═══════════════════════════════════════════════════════════════════════════
 # Pydantic model for the result
 # ═══════════════════════════════════════════════════════════════════════════
@@ -128,33 +153,77 @@ def generate(
     max_new_tokens: int = 256,
     **search_kwargs,
 ) -> GenerationResult:
-    """
-    Run the full retrieval -> generation pipeline for a single query.
-
-    Args:
-        query: The customer's question, in English or Roman Urdu.
-        top_k: Number of retrieved products to ground the answer in
-               (Unit 10's pipeline diagram uses the top 5 after reranking).
-        max_new_tokens: Generation length cap passed to the LLM.
-        **search_kwargs: Passed through to SearchRequest — e.g. in_stock,
-                         category, brand, min_price, max_price, mmr_lambda,
-                         use_reranker. Do not pass `query` or `top_k` here;
-                         use the named parameters above instead.
-
-    Returns:
-        GenerationResult with the answer, the context it was grounded in,
-        the full retrieval response, and per-stage timings.
-    """
     timings: dict[str, float] = {}
 
     t0 = time.perf_counter()
-    request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
-    retrieved = search(request)
+    intent = classify_intent(query)
+    timings["routing"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+
+    if intent == "price_filter":
+        try:
+            extraction = extract_price_filter(query)
+            search_kwargs["max_price"] = extraction.max_price
+            search_kwargs["min_price"] = extraction.min_price
+            request = SearchRequest(query=extraction.item_name, top_k=top_k, **search_kwargs)
+            retrieved = search(request)
+            all_results = retrieved.results
+            total_candidates = retrieved.total_candidates
+            stage_timings = retrieved.timings
+        except ExtractionError as e:
+            print(f"[generate] price_filter extraction failed ({e}), falling back to standard_search")
+            request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
+            retrieved = search(request)
+            all_results = retrieved.results
+            total_candidates = retrieved.total_candidates
+            stage_timings = retrieved.timings
+
+    elif intent == "recipe_builder":
+        extraction = extract_recipe(query)
+        all_results = []
+        total_candidates = 0
+        stage_timings: dict[str, float] = {}
+        next_rank = 1
+
+        for ingredient in extraction.ingredients:
+            req = SearchRequest(query=ingredient, top_k=3, **search_kwargs)
+            resp = search(req)
+            for r in resp.results:
+                r_copy = r.model_copy(update={"rank": next_rank})
+                all_results.append(r_copy)
+                next_rank += 1
+            total_candidates += resp.total_candidates
+            for stage, t in resp.timings.items():
+                stage_timings[stage] = stage_timings.get(stage, 0.0) + t
+
+    else:
+        request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
+        retrieved = search(request)
+        all_results = retrieved.results
+        total_candidates = retrieved.total_candidates
+        stage_timings = retrieved.timings
+
     timings["retrieval"] = time.perf_counter() - t0
+
+    # Reconstruct a SearchResponse so GenerationResult.retrieved stays consistent
+    retrieved = SearchResponse(
+        query=query,
+        results=all_results,
+        total_candidates=total_candidates,
+        timings={k: round(v, 4) for k, v in stage_timings.items()},
+    )
 
     t0 = time.perf_counter()
     context = build_context(retrieved.results)
-    prompt = GENERATION_PROMPT.format(context=context, query=query)
+
+    if intent == "recipe_builder":
+        prompt = RECIPE_PROMPT.format(dish_name=extraction.dish_name, context=context, query=query)
+    elif intent == "price_filter":
+        prompt = GENERATION_PROMPT.format(context=context, query=query)
+    else:
+        prompt = GENERATION_PROMPT.format(context=context, query=query)
+
     response = call_llm(prompt, max_new_tokens=max_new_tokens, temperature=0.3)
     timings["generation"] = time.perf_counter() - t0
 

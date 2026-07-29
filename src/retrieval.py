@@ -27,6 +27,7 @@ Usage as a CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pickle
 import time
@@ -36,6 +37,14 @@ from typing import Optional
 import numpy as np
 from pydantic import BaseModel, Field
 from sentence_transformers import CrossEncoder, SentenceTransformer
+
+# ──────────────────────────────────────────────────────────────────────────
+# CACHE IMPORTS
+# ──────────────────────────────────────────────────────────────────────────
+try:
+    from cachetools import TTLCache
+except ImportError:
+    raise ImportError("Please install cachetools: pip install cachetools")
 
 from config import (
     BM25_INDEX_PATH,
@@ -49,6 +58,66 @@ from config import (
 # Re-use the same tokenizer that built the BM25 index so that query
 # tokenization is consistent with corpus tokenization.
 from bm25_index import tokenize
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CACHE SETUP
+# ═══════════════════════════════════════════════════════════════════════════
+# Create a cache that holds 1000 items and expires them after 1 hour (3600 seconds)
+# You can adjust these values based on your needs:
+#   - maxsize=2000 for more queries
+#   - ttl=7200 for 2-hour expiration
+query_cache = TTLCache(maxsize=1000, ttl=3600)
+
+# Cache stats for monitoring
+_cache_stats = {
+    "hits": 0,
+    "misses": 0,
+    "total": 0,
+}
+
+
+def get_cache_stats() -> dict:
+    """Return current cache statistics."""
+    return {
+        "hits": _cache_stats["hits"],
+        "misses": _cache_stats["misses"],
+        "total": _cache_stats["total"],
+        "cache_size": len(query_cache),
+        "hit_rate": _cache_stats["hits"] / _cache_stats["total"] if _cache_stats["total"] > 0 else 0,
+    }
+
+
+def _generate_cache_key(request: SearchRequest) -> str:
+    """
+    Generate a unique cache key based on the query and all filters.
+    
+    Uses hashlib to create a deterministic key from all search parameters.
+    """
+    # Build a string representation of all search parameters
+    key_parts = [
+        request.query.strip().lower(),  # Normalize query
+        str(request.in_stock),
+        str(request.category or "").strip().lower(),
+        str(request.brand or "").strip().lower(),
+        str(request.min_price or ""),
+        str(request.max_price or ""),
+        str(request.top_k),
+        str(request.bm25_candidates),
+        str(request.vector_candidates),
+        str(request.rrf_k),
+        str(request.rrf_alpha),
+        str(request.mmr_lambda),
+        str(request.mmr_candidates),
+        str(request.use_reranker),
+        str(request.conditional_rerank),
+        str(request.confidence_threshold),
+    ]
+    
+    key_string = "|".join(key_parts)
+    
+    # Create a hash for a fixed-length key
+    return hashlib.md5(key_string.encode()).hexdigest()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Pydantic models
@@ -69,12 +138,12 @@ class SearchRequest(BaseModel):
     max_price: Optional[float] = Field(default=None, ge=0)
 
     # --- Pipeline controls ---
-    bm25_candidates: int = Field(default=300, description="Number of BM25 candidates for Stage 1")
-    vector_candidates: int = Field(default=300, description="Number of vector candidates for Stage 1")
+    bm25_candidates: int = Field(default=50, description="Number of BM25 candidates for Stage 1")
+    vector_candidates: int = Field(default=50, description="Number of vector candidates for Stage 1")
     rrf_k: int = Field(default=60, description="RRF constant k (standard=60)")
-    rrf_alpha: float = Field(default=0.6, ge=0.0, le=1.0, description="Weight for Vector results in WRRF")
-    mmr_lambda: float = Field(default=0.8, ge=0.0, le=1.0)
-    mmr_candidates: int = Field(default=30, description="Number of candidates passed to Stage 2")
+    rrf_alpha: float = Field(default=0.4, ge=0.0, le=1.0, description="Weight for Vector results in WRRF")
+    mmr_lambda: float = Field(default=1, ge=0.0, le=1.0)
+    mmr_candidates: int = Field(default=10, description="Number of candidates passed to Stage 2")
     use_reranker: bool = Field(default=True, description="Master toggle for cross-encoder reranking")
     
     # ── CONDITIONAL RERANKING CONTROLS ──
@@ -83,7 +152,7 @@ class SearchRequest(BaseModel):
         description="Skip reranker if Stage 1 confidence is high"
     )
     confidence_threshold: float = Field(
-        default=1.0, 
+        default=0.7, 
         ge=0.0, le=1.0, 
         description="Fraction of max theoretical WRRF score to trigger high confidence"
     )
@@ -110,6 +179,7 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
     total_candidates: int = Field(description="Number of candidates after RRF fusion (before MMR/reranking)")
     timings: dict[str, float] = Field(default_factory=dict, description="Time in seconds for each pipeline stage")
+    from_cache: bool = Field(default=False, description="Whether this response came from cache")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -175,6 +245,8 @@ def get_embed_model() -> SentenceTransformer:
     """Shared accessor so other modules (evaluation.py) reuse this loaded
     instance instead of loading a second copy of the same model."""
     return _get_resources()["embed_model"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Metadata filtering
 # ═══════════════════════════════════════════════════════════════════════════
@@ -318,7 +390,7 @@ def _check_stage1_confidence(
     bm25_results: list[tuple[str, float]],
     vector_results: list[tuple[str, float]],
     k: int = 60,
-    threshold: float = 0.85,
+    threshold: float = 0.70,
 ) -> tuple[bool, str]:
     """
     Evaluates whether Stage 1 retrieval produced a high-confidence match.
@@ -347,6 +419,7 @@ def _check_stage1_confidence(
 
     return False, f"low_confidence (ratio={score_ratio:.2%})"
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 2: Maximal Marginal Relevance (MMR)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -356,7 +429,7 @@ def mmr_rerank(
     query: str,
     candidate_ids: list[str],
     top_k: int = 50,
-    lambda_param: float = 0.8,
+    lambda_param: float = 1,
 ) -> list[str]:
     """
     Apply Maximal Marginal Relevance to reduce redundancy.
@@ -484,22 +557,25 @@ def cross_encoder_rerank(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Main search orchestrator
+# Main search orchestrator WITH CACHING
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def search(request: SearchRequest) -> SearchResponse:
     """
-    Execute the full two-stage hybrid search pipeline.
+    Execute the full two-stage hybrid search pipeline with caching.
 
     Pipeline:
-        1. BM25 candidates (top N)
-        2. Vector candidates (top N)
-        3. RRF fusion
-        4. Metadata filtering
-        5. MMR diversity filtering
-        6. Cross-encoder reranking (optional)
-        7. Return top_k results
+        1. Check cache for existing results
+        2. If cache miss, run the full pipeline:
+            a. BM25 candidates (top N)
+            b. Vector candidates (top N)
+            c. RRF fusion
+            d. Metadata filtering
+            e. MMR diversity filtering
+            f. Cross-encoder reranking (optional)
+        3. Cache the response before returning
+        4. Return results
 
     Args:
         request: A SearchRequest with query, filters, and pipeline controls.
@@ -507,6 +583,31 @@ def search(request: SearchRequest) -> SearchResponse:
     Returns:
         SearchResponse with ranked results and timing metadata.
     """
+    # ──────────────────────────────────────────────────────────────────────────
+    # 1. CHECK CACHE FIRST
+    # ──────────────────────────────────────────────────────────────────────────
+    cache_key = _generate_cache_key(request)
+    
+    if cache_key in query_cache:
+        _cache_stats["hits"] += 1
+        _cache_stats["total"] += 1
+        cached_response = query_cache[cache_key]
+        # Mark it as from cache
+        cached_response.from_cache = True
+        # Add cache timing info
+        cached_response.timings["cache_hit"] = 0.001
+        print(f"⚡ [Cache] HIT for query: '{request.query}' (Key: {cache_key[:8]}...)")
+        return cached_response
+    
+    _cache_stats["misses"] += 1
+    _cache_stats["total"] += 1
+    print(f"💾 [Cache] MISS for query: '{request.query}' (Key: {cache_key[:8]}...)")
+    print(f"   Cache size: {len(query_cache)}/{query_cache.maxsize} items")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 2. RUN THE FULL PIPELINE (YOUR EXISTING CODE)
+    # ──────────────────────────────────────────────────────────────────────────
+    
     res = _get_resources()
     chunks_by_id = res["chunks_by_id"]
     timings: dict[str, float] = {}
@@ -523,12 +624,16 @@ def search(request: SearchRequest) -> SearchResponse:
 
     # ── Stage 1c: WRRF Fusion ──
     t0 = time.perf_counter()
-    # alpha=0.4 means BM25 gets 60% of the weight, Vector gets 40%
-    fused = weighted_reciprocal_rank_fusion(vector_results, bm25_results, alpha=0.4)
+    fused = weighted_reciprocal_rank_fusion(
+        vector_results, 
+        bm25_results, 
+        alpha=request.rrf_alpha
+    )
     timings["rrf"] = time.perf_counter() - t0
     
-    # Optional: Safely truncate after fusion to speed up downstream filtering
-    fused = fused[:200]
+    # Truncate after fusion
+    fused = fused[:100]
+    fused_score_map = dict(fused)
     total_candidates = len(fused)
 
     # ── Metadata Filtering ──
@@ -542,20 +647,26 @@ def search(request: SearchRequest) -> SearchResponse:
 
     # ── Stage 2a: MMR Diversity ──
     t0 = time.perf_counter()
-    mmr_ids = mmr_rerank(
-        query=request.query,
-        candidate_ids=filtered_ids,
-        top_k=request.mmr_candidates,
-        lambda_param=request.mmr_lambda,
-    )
+    
+    if request.mmr_lambda >= 1.0:
+        # Skip MMR! Just take the top candidates directly from the WRRF filtered list
+        mmr_ids = filtered_ids[:request.mmr_candidates]
+    else:
+        # Run MMR only when diversity is actually requested (< 1.0)
+        mmr_ids = mmr_rerank(
+            query=reques, # Use expanded_query if you added the dictionary step
+            candidate_ids=filtered_ids,
+            top_k=request.mmr_candidates,
+            lambda_param=request.mmr_lambda,
+        )
+        
     timings["mmr"] = time.perf_counter() - t0
 
     # ── Stage 2b: Cross-Encoder Reranking (optional) ──
     skipped_reranker = False
     skip_reason = ""
 
-    if request.use_reranker and mmr_ids:
-        # Check if Stage 1 confidence is high enough to bypass reranking
+    if False and request.use_reranker and mmr_ids:
         if request.conditional_rerank:
             is_confident, skip_reason = _check_stage1_confidence(
                 fused_results=fused,
@@ -568,12 +679,10 @@ def search(request: SearchRequest) -> SearchResponse:
                 skipped_reranker = True
 
         if skipped_reranker:
-            # Skip the slow model and use the MMR top-k directly
             timings["reranker"] = 0.0
-            final_ids_scores = [(cid, 0.0) for cid in mmr_ids[: request.top_k]]
+            final_ids_scores = [(cid, fused_score_map.get(cid, 0.0)) for cid in mmr_ids[:request.top_k]]
             print(f"⚡ [Conditional Rerank] SKIPPED Cross-Encoder ({skip_reason})")
         else:
-            # Run Cross-Encoder for ambiguous / low-confidence queries
             t0 = time.perf_counter()
             reranked = cross_encoder_rerank(
                 query=request.query,
@@ -584,7 +693,7 @@ def search(request: SearchRequest) -> SearchResponse:
             final_ids_scores = reranked
             print(f"🔍 [Conditional Rerank] EXECUTED Cross-Encoder ({skip_reason})")
     else:
-        final_ids_scores = [(cid, 0.0) for cid in mmr_ids[: request.top_k]]
+        final_ids_scores = [(cid, fused_score_map.get(cid, 0.0)) for cid in mmr_ids[:request.top_k]]
         timings["reranker"] = 0.0
 
     # ── Build response ──
@@ -606,11 +715,63 @@ def search(request: SearchRequest) -> SearchResponse:
             )
         )
 
-    return SearchResponse(
+    response = SearchResponse(
         query=request.query,
         results=results,
         total_candidates=total_candidates,
         timings={k: round(v, 4) for k, v in timings.items()},
+        from_cache=False,
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 3. SAVE TO CACHE
+    # ──────────────────────────────────────────────────────────────────────────
+    query_cache[cache_key] = response
+    print(f"💾 [Cache] Saved response for query: '{request.query}'")
+    print(f"   Cache size: {len(query_cache)}/{query_cache.maxsize} items")
+
+    return response
+
+
+def clear_cache() -> None:
+    """Clear the entire query cache."""
+    global query_cache
+    old_size = len(query_cache)
+    query_cache.clear()
+    print(f"🧹 [Cache] Cleared {old_size} items from cache")
+
+
+def get_cache_info() -> dict:
+    """Get detailed cache information."""
+    return {
+        "size": len(query_cache),
+        "maxsize": query_cache.maxsize,
+        "ttl": query_cache.ttl,
+        "stats": _cache_stats,
+        "hit_rate": f"{_cache_stats['hits'] / _cache_stats['total'] * 100:.1f}%" if _cache_stats['total'] > 0 else "0%",
+    }
+
+
+def merge_search_responses(responses: list[SearchResponse], combined_query: str) -> SearchResponse:
+    """Combine multiple per-ingredient SearchResponses into one, re-ranked by rank position."""
+    all_results = []
+    next_rank = 1
+    for resp in responses:
+        for r in resp.results:
+            r_copy = r.model_copy(update={"rank": next_rank})
+            all_results.append(r_copy)
+            next_rank += 1
+
+    merged_timings: dict[str, float] = {}
+    for resp in responses:
+        for stage, t in resp.timings.items():
+            merged_timings[stage] = merged_timings.get(stage, 0.0) + t
+
+    return SearchResponse(
+        query=combined_query,
+        results=all_results,
+        total_candidates=sum(r.total_candidates for r in responses),
+        timings={k: round(v, 4) for k, v in merged_timings.items()},
     )
 
 
@@ -630,9 +791,25 @@ def main() -> None:
     parser.add_argument("--brand", type=str, default=None, help="Brand filter")
     parser.add_argument("--min-price", type=float, default=None, help="Minimum price")
     parser.add_argument("--max-price", type=float, default=None, help="Maximum price")
-    parser.add_argument("--mmr-lambda", type=float, default=0.8, help="MMR λ (0=diversity, 1=relevance)")
+    parser.add_argument("--mmr-lambda", type=float, default=0.9, help="MMR λ (0=diversity, 1=relevance)")
     parser.add_argument("--no-rerank", action="store_true", help="Skip cross-encoder reranking")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear the query cache before running")
+    parser.add_argument("--show-cache", action="store_true", help="Show cache statistics")
     args = parser.parse_args()
+
+    if args.clear_cache:
+        clear_cache()
+        return
+
+    if args.show_cache:
+        info = get_cache_info()
+        print("Cache Information:")
+        print(f"  Size: {info['size']}/{info['maxsize']}")
+        print(f"  TTL: {info['ttl']} seconds")
+        print(f"  Hits: {info['stats']['hits']}")
+        print(f"  Misses: {info['stats']['misses']}")
+        print(f"  Hit Rate: {info['hit_rate']}")
+        return
 
     request = SearchRequest(
         query=args.query,
@@ -655,7 +832,8 @@ def main() -> None:
     response = search(request)
 
     print(f"Found {response.total_candidates} candidates after RRF fusion")
-    print(f"Returning top {len(response.results)} results:\n")
+    print(f"Returning top {len(response.results)} results:")
+    print(f"  From Cache: {'✅ YES' if response.from_cache else '❌ NO'}\n")
 
     for r in response.results:
         stock_str = "✓ in stock" if r.in_stock else "✗ out of stock"
@@ -670,7 +848,12 @@ def main() -> None:
         print(f"  {stage:>12s}: {elapsed:.4f}s")
     total = sum(response.timings.values())
     print(f"  {'TOTAL':>12s}: {total:.4f}s")
+    
+    # Show cache stats at the end
+    info = get_cache_info()
+    print(f"\nCache Stats: {info['size']}/{info['maxsize']} items, Hit Rate: {info['hit_rate']}")
 
 
 if __name__ == "__main__":
     main()
+
