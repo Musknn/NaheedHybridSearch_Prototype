@@ -1,19 +1,33 @@
-# Core
+# ── Core ──────────────────────────────────────────────────────────────────
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 python-dotenv==1.0.0
 
-# Data & ML
+# ── Data & ML ─────────────────────────────────────────────────────────────
 pandas==2.1.4
 numpy==1.26.2
 rank-bm25==0.2.2
-sentence-transformers==2.2.2
+# Bumped from 2.2.2: bge-reranker-v2-m3 (CrossEncoder) and the LoRA-merged
+# model_run_6 checkpoint need a newer sentence-transformers/transformers
+# stack than 2.2.2 provides. This matches the environment the fine-tuning
+# notebooks actually ran on (sentence-transformers 5.4.1 / transformers 5.0.0),
+# so pin close to that rather than an old default.
+sentence-transformers>=2.7.0
+transformers>=4.41.0
+torch>=2.1.0
 
-# LLM Clients
+# retrieval.py's query cache (TTLCache) — was missing from this list.
+cachetools==5.3.2
+
+# ── LLM Clients ───────────────────────────────────────────────────────────
 openai==1.3.7
 groq==0.5.0
-google-generativeai==0.5.0
+# llm_client.py does `from google import genai` — that's the NEW Google
+# GenAI SDK, package name "google-genai". The old "google-generativeai"
+# package (imported as `import google.generativeai as genai`) is a
+# DIFFERENT SDK with a different API and will NOT satisfy this import.
+google-genai>=0.3.0
 
-# Utilities
+# ── Utilities ─────────────────────────────────────────────────────────────
 tqdm==4.66.1
