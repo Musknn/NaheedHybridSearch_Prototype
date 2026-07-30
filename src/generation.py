@@ -2,34 +2,29 @@
 STEP 2b: RAG Generation
 --------------------------
 Takes the top-ranked products from retrieval.py's hybrid search pipeline
-and uses an LLM (Tiny Aya — see llm_client.py) to generate a natural-
-language answer grounded in that retrieved context.
+and uses an LLM (see llm_client.py) to generate a natural-language answer
+grounded in that retrieved context.
 
-Pipeline position (per Unit 10's "Complete RAG Pipeline with Evaluation" slide):
+Pipeline position:
 
     USER QUERY
-      -> retrieval.search()   [BM25 + Semantic -> RRF -> MMR -> Cross-Encoder rerank]
+      -> router.classify_intent()
+      -> retrieval.search()   [BM25 + Vector -> WRRF -> MMR -> Cross-Encoder rerank]
       -> TOP-K PRODUCTS
       -> build_context()      (this module)
-      -> LLM ("LLM1", this module)
+      -> llm_client.call_llm()
       -> RAG RESPONSE
-      -> hand off `result.response` + `result.context` to evaluation.py
-         for faithfulness/relevancy scoring
 
 Design note on context:
-    The context passed to the LLM (and later to evaluation.evaluate_faithfulness)
-    is built only from the structured fields retrieval.py already returns
-    (name, brand, category, price, in_stock) rather than the raw chunk text.
-    Every one of those fields is independently checkable, which is exactly
-    what faithfulness scoring needs: a claim like "it costs Rs. 450 and is in
-    stock" can be verified word-for-word against this context, rather than
-    against a longer, harder-to-check paragraph of raw catalogue text.
+    The context passed to the LLM is built only from the structured
+    fields retrieval.py already returns (name, brand, category, price,
+    in_stock) rather than raw chunk text — every field is independently
+    checkable, which is what faithfulness scoring (evaluation.py) needs.
 
 Usage as a module:
     from generation import generate
     result = generate("pampers diapers for a newborn")
     print(result.response)
-    print(result.context)   # feed this into evaluation.evaluate_faithfulness()
 
 Usage as a CLI:
     python generation.py "is panadol in stock"
@@ -42,17 +37,14 @@ import time
 
 from pydantic import BaseModel, Field
 
+from config import GENERATION
 from llm_client import call_llm
-from retrieval import SearchRequest, SearchResponse, SearchResult, search
-from router import classify_intent, extract_recipe, extract_price_filter, ExtractionError
+from retrieval import SearchRequest, SearchResponse, SearchResult, merge_search_responses, search
+from router import ExtractionError, classify_intent, extract_price_filter, extract_recipe
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Prompt template
+# Prompt templates
 # ═══════════════════════════════════════════════════════════════════════════
-# Explicitly instructed to answer ONLY from the retrieved context and to
-# admit when it doesn't have the answer, rather than guessing — this is the
-# core RAG motivation from Unit 8 ("LLMs hallucinate when missing context")
-# and exactly what evaluation.py's faithfulness metric checks for afterward.
 
 GENERATION_PROMPT = """You are a helpful shopping assistant for Naheed, a Pakistani pharmacy 
 and supermarket chain. Answer the customer's question using ONLY the product 
@@ -98,8 +90,9 @@ and price, then a total estimated cost at the end. If an ingredient wasn't found
 mention it clearly so the customer knows to source it elsewhere.
 
 Answer:"""
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Pydantic model for the result
+# Result model
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -122,12 +115,7 @@ class GenerationResult(BaseModel):
 
 
 def build_context(results: list[SearchResult]) -> str:
-    """
-    Format retrieved products into a numbered context block for the LLM.
-
-    Each line includes exactly the fields a customer could ask about, so
-    every claim the LLM might generate is checkable against this same text.
-    """
+    """Format retrieved products into a numbered context block for the LLM."""
     if not results:
         return "No matching products were found in the catalogue."
 
@@ -136,10 +124,46 @@ def build_context(results: list[SearchResult]) -> str:
         stock = "in stock" if r.in_stock else "out of stock"
         price = f"Rs. {r.price:,.0f}" if r.price is not None else "price unavailable"
         lines.append(
-            f"{r.rank}. {r.name} — Brand: {r.brand} | Category: {r.category} | "
-            f"{price} | {stock}"
+            f"{r.rank}. {r.name} — Brand: {r.brand} | Category: {r.category} | {price} | {stock}"
         )
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Intent-specific retrieval
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _retrieve_standard_search(query: str, top_k: int, **search_kwargs) -> SearchResponse:
+    request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
+    return search(request)
+
+
+def _retrieve_price_filter(query: str, top_k: int, **search_kwargs) -> tuple[SearchResponse, str | None]:
+    """Returns (response, dish_name=None) — dish_name kept for a uniform tuple shape upstream."""
+    try:
+        extraction = extract_price_filter(query)
+        request = SearchRequest(
+            query=extraction.item_name,
+            top_k=top_k,
+            min_price=extraction.min_price,
+            max_price=extraction.max_price,
+            **search_kwargs,
+        )
+        return search(request), None
+    except ExtractionError as e:
+        print(f"[generate] price_filter extraction failed ({e}), falling back to standard_search")
+        return _retrieve_standard_search(query, top_k, **search_kwargs), None
+
+
+def _retrieve_recipe(query: str, **search_kwargs) -> tuple[SearchResponse, str]:
+    extraction = extract_recipe(query)
+    per_ingredient_responses = [
+        search(SearchRequest(query=ingredient, top_k=3, **search_kwargs))
+        for ingredient in extraction.ingredients
+    ]
+    merged = merge_search_responses(per_ingredient_responses, combined_query=query)
+    return merged, extraction.dish_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -149,82 +173,41 @@ def build_context(results: list[SearchResult]) -> str:
 
 def generate(
     query: str,
-    top_k: int = 5,
-    max_new_tokens: int = 256,
+    top_k: int | None = None,
+    max_new_tokens: int = GENERATION.max_new_tokens,
+    temperature: float = GENERATION.temperature,
     **search_kwargs,
 ) -> GenerationResult:
+    """
+    Run the full RAG pipeline: classify intent -> retrieve -> build context
+    -> generate. `top_k` defaults to None, letting retrieval.py resolve it
+    from config.RETRIEVAL.default_top_k, same as a direct search() call.
+    """
     timings: dict[str, float] = {}
+    dish_name: str | None = None
 
     t0 = time.perf_counter()
     intent = classify_intent(query)
     timings["routing"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-
     if intent == "price_filter":
-        try:
-            extraction = extract_price_filter(query)
-            search_kwargs["max_price"] = extraction.max_price
-            search_kwargs["min_price"] = extraction.min_price
-            request = SearchRequest(query=extraction.item_name, top_k=top_k, **search_kwargs)
-            retrieved = search(request)
-            all_results = retrieved.results
-            total_candidates = retrieved.total_candidates
-            stage_timings = retrieved.timings
-        except ExtractionError as e:
-            print(f"[generate] price_filter extraction failed ({e}), falling back to standard_search")
-            request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
-            retrieved = search(request)
-            all_results = retrieved.results
-            total_candidates = retrieved.total_candidates
-            stage_timings = retrieved.timings
-
+        retrieved, dish_name = _retrieve_price_filter(query, top_k, **search_kwargs)
     elif intent == "recipe_builder":
-        extraction = extract_recipe(query)
-        all_results = []
-        total_candidates = 0
-        stage_timings: dict[str, float] = {}
-        next_rank = 1
-
-        for ingredient in extraction.ingredients:
-            req = SearchRequest(query=ingredient, top_k=3, **search_kwargs)
-            resp = search(req)
-            for r in resp.results:
-                r_copy = r.model_copy(update={"rank": next_rank})
-                all_results.append(r_copy)
-                next_rank += 1
-            total_candidates += resp.total_candidates
-            for stage, t in resp.timings.items():
-                stage_timings[stage] = stage_timings.get(stage, 0.0) + t
-
+        retrieved, dish_name = _retrieve_recipe(query, **search_kwargs)
     else:
-        request = SearchRequest(query=query, top_k=top_k, **search_kwargs)
-        retrieved = search(request)
-        all_results = retrieved.results
-        total_candidates = retrieved.total_candidates
-        stage_timings = retrieved.timings
-
+        retrieved = _retrieve_standard_search(query, top_k, **search_kwargs)
     timings["retrieval"] = time.perf_counter() - t0
-
-    # Reconstruct a SearchResponse so GenerationResult.retrieved stays consistent
-    retrieved = SearchResponse(
-        query=query,
-        results=all_results,
-        total_candidates=total_candidates,
-        timings={k: round(v, 4) for k, v in stage_timings.items()},
-    )
 
     t0 = time.perf_counter()
     context = build_context(retrieved.results)
 
     if intent == "recipe_builder":
-        prompt = RECIPE_PROMPT.format(dish_name=extraction.dish_name, context=context, query=query)
-    elif intent == "price_filter":
-        prompt = GENERATION_PROMPT.format(context=context, query=query)
+        prompt = RECIPE_PROMPT.format(dish_name=dish_name, context=context, query=query)
     else:
         prompt = GENERATION_PROMPT.format(context=context, query=query)
 
-    response = call_llm(prompt, max_new_tokens=max_new_tokens, temperature=0.3)
+    response = call_llm(prompt, max_new_tokens=max_new_tokens, temperature=temperature)
     timings["generation"] = time.perf_counter() - t0
 
     return GenerationResult(
@@ -242,12 +225,10 @@ def generate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="RAG answer generation for the Naheed product search chatbot"
-    )
+    parser = argparse.ArgumentParser(description="RAG answer generation for the Naheed product search chatbot")
     parser.add_argument("query", type=str, help="Customer question (English or Roman Urdu)")
-    parser.add_argument("--top-k", type=int, default=5, help="Number of retrieved products to ground the answer in")
-    parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens the LLM may generate")
+    parser.add_argument("--top-k", type=int, default=None, help="Number of retrieved products to ground the answer in")
+    parser.add_argument("--max-new-tokens", type=int, default=GENERATION.max_new_tokens)
     parser.add_argument("--in-stock", action="store_true", help="Only consider in-stock products")
     parser.add_argument("--category", type=str, default=None, help="Category filter")
     parser.add_argument("--brand", type=str, default=None, help="Brand filter")
@@ -261,20 +242,20 @@ def main() -> None:
         in_stock=True if args.in_stock else None,
         category=args.category,
         brand=args.brand,
-        use_reranker=not args.no_rerank,
+        use_reranker=(False if args.no_rerank else None),
     )
 
     print(f"Query: {result.query}\n")
     print("Retrieved context:")
     print(result.context)
-    print()
-    print("Answer:")
+    print("\nAnswer:")
     print(result.response)
-    print()
-    print("Timings:")
+    print("\nTimings:")
     for stage, elapsed in result.timings.items():
         print(f"  {stage:>10s}: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
     main()
+
+    

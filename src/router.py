@@ -1,9 +1,13 @@
 """
-Query Router — Intent classification + structured extraction
-using Groq (via llm_client.call_llm).
+Query Router — Intent classification + structured extraction, via
+llm_client.call_llm(). Model names and generation hyperparameters come
+from config.ROUTER_*_MODEL_NAME / config.ROUTING — nothing hardcoded here.
 """
 import json
+
 from pydantic import BaseModel
+
+from config import ROUTER_EXTRACTION_MODEL_NAME, ROUTER_INTENT_MODEL_NAME, ROUTING
 from llm_client import call_llm
 
 
@@ -22,7 +26,6 @@ class ExtractionError(Exception):
     """Raised when structured extraction fails after the model call succeeds
     but the response can't be parsed/validated. Callers (generation.py)
     should catch this and fall back to standard_search."""
-    pass
 
 
 def _safe_json(raw: str) -> dict:
@@ -42,6 +45,8 @@ ROUTER_PROMPT = """Classify the user's grocery/pharmacy chatbot query into exact
 Respond ONLY with JSON: {"intent": "<category>"}
 No explanation, no markdown fences."""
 
+VALID_INTENTS = {"recipe_builder", "price_filter", "standard_search"}
+
 
 def classify_intent(query: str) -> str:
     """
@@ -53,9 +58,9 @@ def classify_intent(query: str) -> str:
     try:
         raw = call_llm(
             prompt=f"{ROUTER_PROMPT}\n\nQuery: {query}",
-            model_name="llama-3.1-8b-instant",
-            max_new_tokens=50,
-            temperature=0.0,
+            model_name=ROUTER_INTENT_MODEL_NAME,
+            max_new_tokens=ROUTING.intent_max_new_tokens,
+            temperature=ROUTING.intent_temperature,
         )
     except Exception as e:
         print(f"[router] classify_intent call_llm failed ({e}), falling back to standard_search")
@@ -67,7 +72,7 @@ def classify_intent(query: str) -> str:
         print(f"[router] classify_intent parse failed ({e}), raw={raw!r}, falling back to standard_search")
         return "standard_search"
 
-    if intent not in {"recipe_builder", "price_filter", "standard_search"}:
+    if intent not in VALID_INTENTS:
         print(f"[router] classify_intent returned unknown intent {intent!r}, falling back to standard_search")
         return "standard_search"
 
@@ -78,8 +83,7 @@ def extract_recipe(query: str) -> RecipeExtraction:
     """
     Extract dish name + ingredients. Raises ExtractionError on any failure
     (model call failure, malformed JSON, schema validation failure) so the
-    caller (generation.py) can catch it and fall back to a standard_search
-    request instead of crashing.
+    caller (generation.py) can catch it and fall back to standard_search.
     """
     schema = RecipeExtraction.model_json_schema()
     prompt = f"""Extract the dish name and the full list of ingredients needed to cook it.
@@ -91,7 +95,12 @@ Respond ONLY with JSON matching this schema exactly:
 Query: {query}"""
 
     try:
-        raw = call_llm(prompt=prompt, model_name="llama-3.3-70b-versatile", max_new_tokens=300, temperature=0.0)
+        raw = call_llm(
+            prompt=prompt,
+            model_name=ROUTER_EXTRACTION_MODEL_NAME,
+            max_new_tokens=ROUTING.extraction_max_new_tokens,
+            temperature=ROUTING.extraction_temperature,
+        )
     except Exception as e:
         raise ExtractionError(f"extract_recipe call_llm failed: {e}") from e
 
@@ -104,8 +113,7 @@ Query: {query}"""
 def extract_price_filter(query: str) -> PriceFilter:
     """
     Extract item name + price bounds. Raises ExtractionError on any failure
-    so the caller (generation.py) can catch it and fall back to a
-    standard_search request instead of crashing.
+    so the caller (generation.py) can catch it and fall back to standard_search.
     """
     schema = PriceFilter.model_json_schema()
     prompt = f"""Extract the item/category being searched for and any price constraint in PKR.
@@ -115,7 +123,12 @@ Respond ONLY with JSON matching this schema exactly:
 Query: {query}"""
 
     try:
-        raw = call_llm(prompt=prompt, model_name="llama-3.3-70b-versatile", max_new_tokens=150, temperature=0.0)
+        raw = call_llm(
+            prompt=prompt,
+            model_name=ROUTER_EXTRACTION_MODEL_NAME,
+            max_new_tokens=150,
+            temperature=ROUTING.extraction_temperature,
+        )
     except Exception as e:
         raise ExtractionError(f"extract_price_filter call_llm failed: {e}") from e
 
@@ -123,3 +136,4 @@ Query: {query}"""
         return PriceFilter(**_safe_json(raw))
     except Exception as e:
         raise ExtractionError(f"extract_price_filter parse/validation failed: {e}, raw={raw!r}") from e
+    

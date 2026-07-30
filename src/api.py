@@ -4,26 +4,25 @@ Exposes the hybrid search pipeline as REST endpoints.
 """
 
 import sys
-import os
 from pathlib import Path
 from typing import Optional, List
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-import uvicorn
 
-# Add src to path
+import uvicorn
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 sys.path.insert(0, str(Path(__file__).parent))
 
+from generation import generate
 from retrieval import SearchRequest, search
-from generation import generate  # ← NEW: Import generation
 
 # ──────────────────────────────────────────────────────────────────────────
 # Pydantic Models for API
 # ──────────────────────────────────────────────────────────────────────────
 
+
 class ProductResponse(BaseModel):
-    """Single product in search results."""
     id: str
     rank: int
     name: str
@@ -39,7 +38,6 @@ class ProductResponse(BaseModel):
 
 
 class SearchResponseAPI(BaseModel):
-    """API response wrapper."""
     query: str
     results: List[ProductResponse]
     total_candidates: int
@@ -48,16 +46,10 @@ class SearchResponseAPI(BaseModel):
 
 
 class AutoCompleteResponse(BaseModel):
-    """Autocomplete suggestions."""
     suggestions: List[str]
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# NEW: Chat Response Model
-# ──────────────────────────────────────────────────────────────────────────
-
 class ChatResponseAPI(BaseModel):
-    """Response for chat/QA endpoint."""
     query: str
     answer: str
     products: List[ProductResponse]
@@ -71,16 +63,15 @@ class ChatResponseAPI(BaseModel):
 app = FastAPI(
     title="Naheed Product Search API",
     description="Hybrid search engine for Naheed product catalogue",
-    version="1.0.0"
+    version="1.0.0",
 )
 
-# Enable CORS for frontend development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "http://127.0.0.1:5500",  # VS Code Live Server
+        "http://127.0.0.1:5500",
         "http://localhost:8080",
         "*",  # For development only - remove in production
     ],
@@ -90,8 +81,44 @@ app.add_middleware(
 )
 
 # ──────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _to_product_response(r, include_short_description: bool = False) -> ProductResponse:
+    return ProductResponse(
+        id=r.id,
+        rank=r.rank,
+        name=r.name,
+        brand=r.brand,
+        category=r.category,
+        price=r.price,
+        in_stock=r.in_stock,
+        url_key=r.url_key,
+        score=r.score,
+        short_description=(f"{r.brand} {r.name}" if r.brand else r.name) if include_short_description else None,
+    )
+
+
+def get_suggestions(products: List[ProductResponse]) -> List[str]:
+    """Generate related search suggestions from the top results."""
+    suggestions = []
+
+    categories = {p.category for p in products[:5] if p.category}
+    if categories:
+        suggestions.append(f"More in {next(iter(categories))}")
+
+    brands = {p.brand for p in products[:5] if p.brand}
+    if brands:
+        suggestions.append(f"Shop {next(iter(brands))}")
+
+    return suggestions[:3]
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Search Endpoints
 # ──────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/search", response_model=SearchResponseAPI)
 async def search_products(
@@ -102,13 +129,11 @@ async def search_products(
     brand: Optional[str] = Query(None, description="Filter by brand"),
     min_price: Optional[float] = Query(None, description="Minimum price", ge=0),
     max_price: Optional[float] = Query(None, description="Maximum price", ge=0),
-    use_reranker: bool = Query(True, description="Use cross-encoder reranking"),
 ):
-    """
-    Hybrid search endpoint combining BM25 + Vector search.
-    
-    Returns top-k products with metadata and ranking scores.
-    """
+    """Hybrid search endpoint combining BM25 + Vector search. Every pipeline
+    hyperparameter (rrf_alpha, mmr_lambda, use_reranker, confidence
+    threshold, etc.) is controlled solely by config.RETRIEVAL — the client
+    only ever supplies the query and metadata filters, never tuning knobs."""
     try:
         request = SearchRequest(
             query=q,
@@ -118,33 +143,12 @@ async def search_products(
             brand=brand,
             min_price=min_price,
             max_price=max_price,
-            use_reranker=use_reranker,
-            bm25_candidates=100,
-            vector_candidates=100,
-            mmr_candidates=30,
         )
-        
         response = search(request)
-        
-        # Convert to API response format
-        products = []
-        for r in response.results:
-            products.append(ProductResponse(
-                id=r.id,
-                rank=r.rank,
-                name=r.name,
-                brand=r.brand,
-                category=r.category,
-                price=r.price,
-                in_stock=r.in_stock,
-                url_key=r.url_key,
-                score=r.score,
-                short_description=f"{r.brand} {r.name}" if r.brand else r.name,
-            ))
-        
-        # Generate suggested queries
-        suggested = get_suggestions(q, products) if products else []
-        
+
+        products = [_to_product_response(r, include_short_description=True) for r in response.results]
+        suggested = get_suggestions(products) if products else []
+
         return SearchResponseAPI(
             query=q,
             results=products,
@@ -152,7 +156,6 @@ async def search_products(
             timings=response.timings,
             suggested_queries=suggested,
         )
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -162,133 +165,59 @@ async def autocomplete(
     q: str = Query(..., description="Partial query", min_length=1),
     limit: int = Query(10, description="Max suggestions", ge=1, le=20),
 ):
-    """
-    Autocomplete suggestions as user types.
-    """
+    """Fast suggestions as the user types — deliberately skips the reranker
+    (autocomplete needs low latency far more than it needs precision)."""
     try:
-        # Quick BM25 search with small top_k for suggestions
         request = SearchRequest(
             query=q,
             top_k=limit,
             use_reranker=False,
-            bm25_candidates=50,
-            vector_candidates=50,
         )
         response = search(request)
-        
-        # Extract product names as suggestions
         suggestions = [r.name for r in response.results[:limit]]
-        
-        # Add popular related terms (in production, from analytics)
-        if q.lower() in ["diaper", "diapers", "pampers"]:
+
+        # Popular related terms (in production, sourced from analytics).
+        if q.lower() in ("diaper", "diapers", "pampers"):
             suggestions.extend(["Pampers Baby Dry", "Pampers Active Baby", "Diaper Size 4"])
-        elif q.lower() in ["shampoo", "hair", "conditioner"]:
+        elif q.lower() in ("shampoo", "hair", "conditioner"):
             suggestions.extend(["Hair Care", "Shampoo", "Conditioner", "Hair Oil"])
-        
-        # Deduplicate and limit
+
         seen = set()
         unique_suggestions = []
         for s in suggestions:
             if s not in seen:
                 seen.add(s)
                 unique_suggestions.append(s)
-        
+
         return AutoCompleteResponse(suggestions=unique_suggestions[:limit])
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# NEW: Chat/QA Endpoint
-# ──────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/chat", response_model=ChatResponseAPI)
 async def chat_query(
     query: str = Query(..., description="User question"),
     top_k: int = Query(5, description="Number of products to ground the answer"),
 ):
-    """
-    RAG-powered chat endpoint.
-    Accepts natural language questions and returns grounded answers.
-    """
+    """RAG-powered chat endpoint. Accepts natural language questions and returns grounded answers."""
     try:
-        # Call the generation pipeline
         result = generate(query, top_k=top_k)
-        
-        # Convert retrieved products to ProductResponse
-        products = []
-        for r in result.retrieved.results:
-            products.append(ProductResponse(
-                id=r.id,
-                rank=r.rank,
-                name=r.name,
-                brand=r.brand,
-                category=r.category,
-                price=r.price,
-                in_stock=r.in_stock,
-                url_key=r.url_key,
-                score=r.score,
-            ))
-        
+        products = [_to_product_response(r) for r in result.retrieved.results]
+
         return ChatResponseAPI(
             query=query,
             answer=result.response,
             products=products,
-            timings=result.timings
+            timings=result.timings,
         )
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Helper Functions
-# ──────────────────────────────────────────────────────────────────────────
-
-def get_suggestions(query: str, products: List[ProductResponse]) -> List[str]:
-    """Generate related search suggestions."""
-    suggestions = []
-    
-    # Category-based suggestions
-    categories = set()
-    for p in products[:5]:
-        if p.category:
-            categories.add(p.category)
-    
-    if categories:
-        suggestions.append(f"More in {list(categories)[0]}")
-    
-    # Brand-based suggestions
-    brands = set()
-    for p in products[:5]:
-        if p.brand:
-            brands.add(p.brand)
-    
-    if brands:
-        suggestions.append(f"Shop {list(brands)[0]}")
-    
-    return suggestions[:3]
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Health Check
-# ──────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "service": "Naheed Product Search"}
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Run Server
-# ──────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    uvicorn.run(
-        "api:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

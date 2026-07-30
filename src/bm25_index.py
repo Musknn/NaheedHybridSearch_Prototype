@@ -37,6 +37,7 @@ Usage:
 
 import argparse
 import json
+import os
 import pickle
 import re
 import time
@@ -212,7 +213,6 @@ def main(sample: Optional[int] = None) -> None:
     t0 = time.perf_counter()
     save_index(index, ids, corpus)
     elapsed = time.perf_counter() - t0
-    import os
     size_mb = os.path.getsize(BM25_INDEX_PATH) / (1024 * 1024)
     print(f"  Saved ({size_mb:.1f} MB) in {elapsed:.1f}s")
 

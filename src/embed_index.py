@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import json
+import os
 import time
 from typing import Optional
 
@@ -145,7 +146,6 @@ def main(
 
     print(f"Saving to {EMBEDDINGS_PATH} and {EMBED_IDS_PATH} ...")
     save_embeddings(embeddings, ids)
-    import os
     emb_mb = os.path.getsize(EMBEDDINGS_PATH) / (1024 * 1024)
     print(f"  Saved embeddings ({emb_mb:.1f} MB)")
 

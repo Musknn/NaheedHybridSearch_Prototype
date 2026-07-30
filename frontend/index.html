@@ -954,12 +954,10 @@
     // API Calls
     // ──────────────────────────────────────────────────────────────────────────
 
-    async function searchProducts(query, filters, topK = 10, rrfAlpha = 0.4) {
+    async function searchProducts(query, filters, topK = 10) {
         const params = new URLSearchParams({
             q: query,
             top_k: String(topK),
-            use_reranker: 'true',
-            rrf_alpha: String(rrfAlpha),
         });
 
         if (filters.in_stock !== undefined) params.append('in_stock', String(filters.in_stock));
@@ -1023,9 +1021,9 @@
                 e.stopPropagation();
                 try {
                     const product = JSON.parse(this.dataset.product);
-                    // Trigger a search with the product name, using chatbot alpha (0.6) and scroll to results
+                    // Trigger a search for the product name and scroll to results
                     searchInput.value = product.name;
-                    performSearch(product.name, 0.6, true);
+                    performSearch(product.name, true);
                 } catch (err) {
                     console.error('Error clicking product:', err);
                 }
@@ -1135,7 +1133,8 @@
         productGrid.innerHTML = data.results.map(product => {
             const imagePath = getImagePath(product.id);
             const fallbackImage = 'images/placeholder.jpg';
-            
+            const dataAttr = JSON.stringify(product).replace(/'/g, '&apos;');
+
             return `
                 <div class="product-card">
                     <div class="product-image">
@@ -1159,11 +1158,74 @@
                                 ${product.in_stock ? '🟢 In Stock' : '🔴 Out of Stock'}
                             </span>
                         </div>
+                        <button
+                            class="add-to-cart-btn"
+                            type="button"
+                            data-product='${dataAttr}'
+                            style="width:100%;margin-top:8px;padding:8px 12px;border:none;border-radius:6px;background:#111827;color:#fff;cursor:pointer;font-size:0.9rem;"
+                        >
+                            🛒 Add to Cart
+                        </button>
                         <div class="product-rank">#${product.rank}</div>
                     </div>
                 </div>
             `;
         }).join('');
+
+        attachAddToCartClicks();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Feedback: Add to Cart -> logs (query, product) as a relevance signal
+    // ──────────────────────────────────────────────────────────────────────────
+
+    async function submitFeedback(query, productId, eventType) {
+        try {
+            const response = await fetch(`${API_URL}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, product_id: productId, event_type: eventType }),
+            });
+            if (!response.ok) throw new Error(`Feedback error: ${response.status}`);
+            return response.json();
+        } catch (error) {
+            console.warn('⚠️ Failed to log feedback:', error);
+            return null;
+        }
+    }
+
+    function attachAddToCartClicks() {
+        document.querySelectorAll('.add-to-cart-btn').forEach(btn => {
+            btn.removeEventListener('click', btn._clickHandler);
+
+            const handler = async function (e) {
+                e.stopPropagation();
+                const product = JSON.parse(this.dataset.product);
+                const originalText = this.textContent;
+
+                this.disabled = true;
+                this.textContent = 'Adding...';
+
+                const result = await submitFeedback(currentQuery, product.id, 'add_to_cart');
+
+                if (result) {
+                    this.textContent = '✓ Added';
+                    this.style.background = '#16a34a';
+                } else {
+                    this.textContent = originalText;
+                    this.disabled = false;
+                }
+
+                setTimeout(() => {
+                    this.textContent = originalText;
+                    this.style.background = '#111827';
+                    this.disabled = false;
+                }, 1500);
+            };
+
+            btn._clickHandler = handler;
+            btn.addEventListener('click', handler);
+        });
     }
 
     function renderAutocomplete(suggestions) {
@@ -1187,7 +1249,7 @@
                 const suggestion = el.dataset.suggestion;
                 searchInput.value = suggestion;
                 autocompleteDropdown.classList.remove('active');
-                performSearch(suggestion, 0.4, false); // default alpha for autocomplete
+                performSearch(suggestion, false);
             });
         });
     }
@@ -1200,10 +1262,10 @@
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Search Logic (with alpha and scrollToResults)
+    // Search Logic (scrollToResults)
     // ──────────────────────────────────────────────────────────────────────────
 
-    async function performSearch(query, alpha = 0.4, scrollToResults = false) {
+    async function performSearch(query, scrollToResults = false) {
         if (!query || query.trim().length === 0) {
             productGrid.innerHTML = '';
             resultsStats.style.display = 'none';
@@ -1218,7 +1280,7 @@
 
         try {
             const filters = getFilters();
-            const data = await searchProducts(trimmedQuery, filters, 10, alpha);
+            const data = await searchProducts(trimmedQuery, filters, 10);
             renderProducts(data);
 
             // ── Scroll and highlight if requested ──
@@ -1290,13 +1352,13 @@
         if (e.key === 'Enter') {
             e.preventDefault();
             autocompleteDropdown.classList.remove('active');
-            performSearch(searchInput.value, 0.4, false); // default alpha for search bar
+            performSearch(searchInput.value, false);
         }
     });
 
     searchButton.addEventListener('click', () => {
         autocompleteDropdown.classList.remove('active');
-        performSearch(searchInput.value, 0.4, false);
+        performSearch(searchInput.value, false);
     });
 
     document.addEventListener('click', (e) => {
@@ -1307,13 +1369,13 @@
 
     [inStockFilter, categoryFilter, brandFilter, minPrice, maxPrice].forEach(el => {
         el.addEventListener('change', () => {
-            if (currentQuery) performSearch(currentQuery, 0.4, false);
+            if (currentQuery) performSearch(currentQuery, false);
         });
         if (el.type === 'number') {
             el.addEventListener('input', () => {
                 clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
-                    if (currentQuery) performSearch(currentQuery, 0.4, false);
+                    if (currentQuery) performSearch(currentQuery, false);
                 }, 400);
             });
         }
@@ -1325,7 +1387,7 @@
         brandFilter.value = '';
         minPrice.value = '';
         maxPrice.value = '';
-        if (currentQuery) performSearch(currentQuery, 0.4, false);
+        if (currentQuery) performSearch(currentQuery, false);
     });
 
     // ──────────────────────────────────────────────────────────────────────────
