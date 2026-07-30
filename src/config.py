@@ -139,7 +139,7 @@ class RetrievalConfig:
     confidence_threshold: float = 0.7   # fraction of max theoretical WRRF score
 
     # --- Output ---
-    default_top_k: int = 5
+    default_top_k: int = 12
 
     # --- Relevance gate ---
     # If the best match's confidence falls below this, search() returns an
@@ -153,7 +153,7 @@ class RetrievalConfig:
     #     because Stage 1 already agreed strongly).
     # Raise this to be stricter about rejecting irrelevant queries; lower
     # it to be more permissive.
-    min_relevance_score: float = 0.35
+    min_relevance_score: float = 0.30
 
     # --- Cache ---
     cache_maxsize: int = 1000
