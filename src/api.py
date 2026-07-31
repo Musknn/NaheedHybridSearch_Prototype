@@ -3,6 +3,13 @@ FastAPI Backend for Naheed Product Search
 Exposes the hybrid search pipeline as REST endpoints.
 """
 
+import os
+
+# Prevent Windows OS Error 1455 (paging file too small) when the embedding
+# model loads via safetensors mmap — same workaround app.py uses, needed
+# here too since this is the entrypoint the frontend actually talks to.
+os.environ["SAFETENSORS_FAST_DISABLE"] = "1"
+
 import sys
 from pathlib import Path
 from typing import Optional, List

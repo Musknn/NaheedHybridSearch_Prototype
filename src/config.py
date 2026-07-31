@@ -31,7 +31,14 @@ SAMPLES_DIR = os.path.join(DATA_DIR, "samples")
 EVAL_DIR = os.path.join(DATA_DIR, "evaluation")
 HELD_OUT_EVAL_PATH = os.path.join(EVAL_DIR, "held_out_eval_v2.csv")
 
+# Full ~109k-row product dump (source of truth for image URLs, among other
+# fields not present in the trimmed prototype catalogue).
+PRODUCTS_FULL_PATH = os.path.join(DATA_DIR, "products_full.jsonl")
+
 MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+IMAGE_MAPPING_PATH = os.path.join(FRONTEND_DIR, "image_mapping.json")
 
 # ── Catalogue switch ────────────────────────────────────────────────────────
 # "prototype" = the 2130-product subset the embedding model was fine-tuned
