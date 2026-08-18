@@ -47,6 +47,13 @@ from rank_bm25 import BM25Okapi
 
 from config import BM25_INDEX_PATH, CHUNKS_PATH
 
+# NOTE ON RUNTIME USE: the index-building code below (build_bm25_index,
+# save_index, main) is OFFLINE / BUILD-TIME ONLY — run manually to
+# (re)generate indexes/<mode>/bm25_index.pkl after chunking.py changes.
+# The tokenize() function just below, however, IS imported at runtime by
+# retrieval.py, so query tokenization stays identical to how the corpus
+# was tokenized when the index was built.
+
 # ---------------------------------------------------------------------------
 # Tokenizer
 # ---------------------------------------------------------------------------

@@ -1,60 +1,107 @@
 """
-Pipeline History Logger
+Search History Logger
 -----------------------
-Captures the complete trace of a query as it travels through retrieval,
-generation, and evaluation, and appends it to a JSONL log file for 
-debugging and reporting.
+Logs every search: the query, every product returned, and each product's
+final score — regardless of whether the user ever clicked or added
+anything to cart. This is what lets you go back and answer "for this
+query, what did we actually return, and was it right?"
+
+This is deliberately separate from feedback.py's log:
+  - `history_logger.py` (this file) — an unconditional record of what the
+    pipeline returned. Written automatically on every search.
+  - `feedback.py` — a record of user/reviewer *judgments* about those
+    results (click, add-to-cart, or an explicit relevant/irrelevant label
+    given while reviewing this history). Written only when feedback happens.
+
+Typical review workflow:
+    1. `GET /api/history` to see what a query returned and each item's score.
+    2. Decide which of those items were actually correct/incorrect.
+    3. `POST /api/feedback` with event_type="relevant" or "irrelevant" for
+       the specific (query, product_id) pairs you just judged — see
+       feedback.py. That feedback then boosts/suppresses those products the
+       next time the same or a similar query comes in.
 """
+from __future__ import annotations
 
-import os
 import json
-from datetime import datetime
-from config import BASE_DIR
+import os
+import time
 
-# Ensure a logs directory exists in the project root
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "pipeline_history.jsonl")
+from pydantic import BaseModel
 
-def log_query_trace(query: str, gen_result, eval_result) -> dict:
+from config import SEARCH_HISTORY_PATH
+
+
+class HistoryResultItem(BaseModel):
+    """One product as it appeared in a logged search result set."""
+
+    id: str
+    rank: int
+    score: float
+    name: str
+    brand: str
+    category: str
+    price: float | None
+    in_stock: bool
+
+
+class SearchHistoryEntry(BaseModel):
+    """A single logged search: the query and everything returned for it."""
+
+    query: str
+    timestamp: float
+    total_candidates: int
+    results: list[HistoryResultItem]
+    timings: dict[str, float]
+    from_cache: bool = False
+
+
+def log_search(
+    query: str,
+    results: list,
+    total_candidates: int,
+    timings: dict[str, float],
+    from_cache: bool = False,
+) -> SearchHistoryEntry:
     """
-    Extracts the pipeline execution trace and appends it to the log file.
-    
-    Args:
-        query: The original user string.
-        gen_result: The GenerationResult object from generation.py
-        eval_result: The EvaluationResult object from evaluation.py
+    Append one search event to the history log. `results` accepts
+    retrieval.SearchResult objects (or anything with the same fields) —
+    duck-typed via .id/.rank/.score/etc. rather than importing
+    retrieval.py, to keep this module dependency-free and reusable from
+    api.py or a CLI/batch script equally.
     """
-    trace = {
-        "timestamp": datetime.now().isoformat(),
-        "query": query,
-        "execution_timings_seconds": gen_result.timings,
-        "retrieval_diagnostics": {
-            "total_candidates_after_rrf": gen_result.retrieved.total_candidates,
-            "final_results_returned": len(gen_result.retrieved.results),
-            "top_products": [
-                {
-                    "rank": r.rank,
-                    "id": r.id,
-                    "name": r.name,
-                    "brand": r.brand,
-                    "reranker_score": r.score,
-                    "in_stock": r.in_stock
-                } for r in gen_result.retrieved.results
-            ]
-        },
-        "generation_trace": {
-            "grounding_context": gen_result.context,
-            "llm_response": gen_result.response
-        },
-        "evaluation_metrics": {
-            "faithfulness": eval_result.faithfulness.score if eval_result.faithfulness else None,
-            "relevancy": eval_result.relevancy.score if eval_result.relevancy else None
-        }
-    }
-    
-    # Append safely to the JSONL file
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(trace, ensure_ascii=False) + "\n")
-        
-    return trace
+    entry = SearchHistoryEntry(
+        query=query,
+        timestamp=time.time(),
+        total_candidates=total_candidates,
+        results=[
+            HistoryResultItem(
+                id=r.id,
+                rank=r.rank,
+                score=r.score,
+                name=r.name,
+                brand=r.brand,
+                category=r.category,
+                price=r.price,
+                in_stock=r.in_stock,
+            )
+            for r in results
+        ],
+        timings=timings,
+        from_cache=from_cache,
+    )
+    with open(SEARCH_HISTORY_PATH, "a", encoding="utf-8") as f:
+        f.write(entry.model_dump_json() + "\n")
+    return entry
+
+
+def load_search_history() -> list[SearchHistoryEntry]:
+    """Load the full search history log."""
+    if not os.path.exists(SEARCH_HISTORY_PATH):
+        return []
+    entries = []
+    with open(SEARCH_HISTORY_PATH, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                entries.append(SearchHistoryEntry(**json.loads(line)))
+    return entries

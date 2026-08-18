@@ -1,14 +1,12 @@
 """
 FastAPI Backend for Naheed Product Search
 Exposes the hybrid search pipeline as REST endpoints.
+
+Scope: pure hybrid search (BM25 + Vector -> WRRF -> confidence filter)
+plus feedback/history review. NO LLM/RAG layer — generation.py, router.py,
+and llm_client.py are intentionally not imported here, so this module has
+zero dependency on any LLM provider (Groq/OpenAI/Gemini) or API key.
 """
-
-import os
-
-# Prevent Windows OS Error 1455 (paging file too small) when the embedding
-# model loads via safetensors mmap — same workaround app.py uses, needed
-# here too since this is the entrypoint the frontend actually talks to.
-os.environ["SAFETENSORS_FAST_DISABLE"] = "1"
 
 import sys
 from pathlib import Path
@@ -21,8 +19,10 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from generation import generate
+import feedback
+import history_logger
 from retrieval import SearchRequest, search
+import cross_sell 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Pydantic Models for API
@@ -44,23 +44,62 @@ class ProductResponse(BaseModel):
     short_description: Optional[str] = None
 
 
+class CrossSellSuggestionResponse(BaseModel):
+    sku: str
+    name: str
+    brand: str
+    price: Optional[float]
+    in_stock: bool
+    bought_percent: float
+    orders: int
+
+
+class CrossSellResponse(BaseModel):
+    sku: str
+    suggestions: List[CrossSellSuggestionResponse]
+
 class SearchResponseAPI(BaseModel):
     query: str
     results: List[ProductResponse]
     total_candidates: int
     timings: dict[str, float]
     suggested_queries: Optional[List[str]] = None
+    cross_sell: Optional[List[CrossSellSuggestionResponse]] = None
 
 
 class AutoCompleteResponse(BaseModel):
     suggestions: List[str]
 
 
-class ChatResponseAPI(BaseModel):
+class FeedbackRequest(BaseModel):
+    """
+    A single feedback event tied to a (query, product) pair — either
+    IMPLICIT (inferred from behavior) or EXPLICIT (a manual label given
+    while reviewing /api/history):
+      - "click"        : implicit, weak positive signal
+      - "add_to_cart"  : implicit, strong positive signal
+      - "relevant"     : explicit "yes this is correct" label
+      - "irrelevant"   : explicit "no this is wrong" label — HARD-EXCLUDES
+                         this product from this query's results going forward
+    """
     query: str
-    answer: str
-    products: List[ProductResponse]
-    timings: dict[str, float]
+    product_id: str
+    event_type: str
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    event: dict
+
+
+class FeedbackHistoryResponse(BaseModel):
+    count: int
+    events: List[dict]
+
+
+class SearchHistoryResponse(BaseModel):
+    count: int
+    entries: List[dict]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -122,6 +161,37 @@ def get_suggestions(products: List[ProductResponse]) -> List[str]:
     return suggestions[:3]
 
 
+def _get_cross_sell_for_top_result(products: List[ProductResponse]) -> List[CrossSellSuggestionResponse]:
+    """
+    "Related to your top result" — used by /api/search only, separate
+    from the dedicated /api/cross-sell endpoint (which is keyed off
+    whatever SKU the frontend explicitly passes, e.g. on Add to Cart).
+    Never raises — a cross-sell lookup failing must never take down a
+    search request, same philosophy as the history_logger try/except
+    right below this function's call site.
+    """
+    if not products:
+        return []
+    try:
+        top_sku = products[0].id
+        suggestions = cross_sell.get_cross_sell(top_sku, top_n=5)
+        return [
+            CrossSellSuggestionResponse(
+                sku=s.sku,
+                name=s.name,
+                brand=s.brand,
+                price=s.price,
+                in_stock=s.in_stock,
+                bought_percent=s.bought_percent,
+                orders=s.orders,
+            )
+            for s in suggestions
+        ]
+    except Exception as cs_err:
+        print(f"[api] cross-sell lookup failed for top result: {cs_err}")
+        return []
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Search Endpoints
 # ──────────────────────────────────────────────────────────────────────────
@@ -155,6 +225,18 @@ async def search_products(
 
         products = [_to_product_response(r, include_short_description=True) for r in response.results]
         suggested = get_suggestions(products) if products else []
+        cross_sell_suggestions = _get_cross_sell_for_top_result(products)
+
+        try:
+            history_logger.log_search(
+                query=q,
+                results=response.results,
+                total_candidates=response.total_candidates,
+                timings=response.timings,
+                from_cache=response.from_cache,
+            )
+        except Exception as log_err:
+            print(f"[api] failed to log search history: {log_err}")  # never fail the request over logging
 
         return SearchResponseAPI(
             query=q,
@@ -162,6 +244,7 @@ async def search_products(
             total_candidates=response.total_candidates,
             timings=response.timings,
             suggested_queries=suggested,
+            cross_sell=cross_sell_suggestions,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -201,29 +284,105 @@ async def autocomplete(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/chat", response_model=ChatResponseAPI)
-async def chat_query(
-    query: str = Query(..., description="User question"),
-    top_k: int = Query(5, description="Number of products to ground the answer"),
+@app.get("/api/cross-sell", response_model=CrossSellResponse)
+async def cross_sell_suggestions(
+    sku: str = Query(..., description="SKU of the product just added to cart"),
+    top_n: int = Query(5, description="Max suggestions to return", ge=1, le=20),
 ):
-    """RAG-powered chat endpoint. Accepts natural language questions and returns grounded answers."""
+    # """
+    # "Customers who bought {sku} also bought..." — call this right after
+    # a product is added to cart. Returns an EMPTY suggestions list (not
+    # an error) if the product has no qualifying co-purchase data — the
+    # frontend should treat that as "nothing to show here", not a failure.
+    # """
     try:
-        result = generate(query, top_k=top_k)
-        products = [_to_product_response(r) for r in result.retrieved.results]
-
-        return ChatResponseAPI(
-            query=query,
-            answer=result.response,
-            products=products,
-            timings=result.timings,
+        suggestions = cross_sell.get_cross_sell(sku, top_n=top_n)
+        return CrossSellResponse(
+            sku=sku,
+            suggestions=[
+                CrossSellSuggestionResponse(
+                    sku=s.sku,
+                    name=s.name,
+                    brand=s.brand,
+                    price=s.price,
+                    in_stock=s.in_stock,
+                    bought_percent=s.bought_percent,
+                    orders=s.orders,
+                )
+                for s in suggestions
+            ],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "service": "Naheed Product Search"}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Feedback Endpoints (click / add-to-cart -> ranking signal + audit log)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/history", response_model=SearchHistoryResponse)
+async def search_history(
+    limit: int = Query(200, description="Max search entries to return (most recent first)", ge=1, le=5000),
+):
+    """
+    Review search history: every query, every product it returned, and
+    each product's final score — regardless of whether anything was
+    clicked/added to cart. Use this to find results worth labeling via
+    POST /api/feedback (event_type="relevant" or "irrelevant").
+    """
+    try:
+        entries = history_logger.load_search_history()
+        recent = entries[-limit:][::-1]  # most recent first
+        return SearchHistoryResponse(count=len(entries), entries=[e.model_dump() for e in recent])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+async def submit_feedback(payload: FeedbackRequest):
+    """
+    Log a feedback event for a (query, product) pair. This both:
+      1. Appends to the append-only feedback log (for manual review — see
+         /api/feedback/history), and
+      2. Immediately becomes available to retrieval.search() — no restart
+         or cache-clear needed (feedback.py rebuilds from disk each call):
+         - "click"/"add_to_cart"/"relevant" boost the product's ranking
+           for this query and similar future queries.
+         - "irrelevant" HARD-EXCLUDES the product from this exact query's
+           results going forward, not just a rank demotion.
+    """
+    try:
+        event = feedback.log_event(
+            query=payload.query,
+            product_id=payload.product_id,
+            event_type=payload.event_type,
+        )
+        return FeedbackResponse(status="logged", event=event.model_dump())
+    except feedback.InvalidEventTypeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/feedback/history", response_model=FeedbackHistoryResponse)
+async def feedback_history(
+    limit: int = Query(200, description="Max events to return (most recent first)", ge=1, le=5000),
+):
+    """Review the full click/add-to-cart history — to check what the
+    pipeline is getting right vs. wrong over time."""
+    try:
+        events = feedback.load_all_events()
+        recent = events[-limit:][::-1]  # most recent first
+        return FeedbackHistoryResponse(count=len(events), events=[e.model_dump() for e in recent])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

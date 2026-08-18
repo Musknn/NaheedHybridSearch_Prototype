@@ -5,9 +5,16 @@ Two-stage retrieval system for the Naheed product search engine.
 
 Stage 1 — Fast Broad Retrieval:
     BM25 (keyword) + Vector (semantic) -> Weighted Reciprocal Rank Fusion
+    -> Confidence filter (applied to EVERY WRRF candidate)
 
-Stage 2 — Precision Refinement:
-    MMR (diversity) -> Cross-Encoder Reranking (relevance)
+Stage 2 — Precision Refinement (currently OFF by default — see config.RETRIEVAL):
+    MMR (diversity, mmr_lambda=1.0 -> no-op) -> Cross-Encoder Reranking (use_reranker=False)
+
+Current running configuration: BM25 + Vector -> WRRF -> confidence
+threshold applied to all fused candidates. Stage 2 (MMR + cross-encoder)
+is left fully implemented and wired in, just toggled off via
+config.RETRIEVAL.use_reranker / mmr_lambda — flip those back on in
+config.py any time without touching this file.
 
 Metadata filtering (in_stock, category, brand, price range) is applied as a
 pre-filter before scoring so that irrelevant products never enter the
@@ -55,13 +62,17 @@ from config import (
     EMBEDDINGS_PATH,
     EMBED_IDS_PATH,
     EMBEDDING_MODEL_NAME,
+    FEEDBACK,
     RERANKER_MODEL_NAME,
     RETRIEVAL,
+    URDU_NORMALIZATION,
 )
 
 # Re-use the same tokenizer that built the BM25 index so that query
 # tokenization is consistent with corpus tokenization.
 from bm25_index import tokenize
+from urdu_normalizer import normalize_query 
+import feedback
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CACHE SETUP  (size/ttl come from config.RETRIEVAL — see config.py)
@@ -136,6 +147,9 @@ class SearchRequest(BaseModel):
     use_reranker: Optional[bool] = Field(default=None, description="Master toggle for cross-encoder reranking")
     conditional_rerank: Optional[bool] = Field(default=None, description="Skip reranker if Stage 1 is confident")
     confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    min_relevance_score: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0, description="Confidence cutoff applied to every WRRF candidate"
+    )
 
 
 class _ResolvedParams(BaseModel):
@@ -151,6 +165,7 @@ class _ResolvedParams(BaseModel):
     use_reranker: bool
     conditional_rerank: bool
     confidence_threshold: float
+    min_relevance_score: float
 
 
 def _resolve_params(request: SearchRequest) -> _ResolvedParams:
@@ -167,6 +182,7 @@ def _resolve_params(request: SearchRequest) -> _ResolvedParams:
         use_reranker=request.use_reranker if request.use_reranker is not None else r.use_reranker,
         conditional_rerank=request.conditional_rerank if request.conditional_rerank is not None else r.conditional_rerank,
         confidence_threshold=request.confidence_threshold if request.confidence_threshold is not None else r.confidence_threshold,
+        min_relevance_score=request.min_relevance_score if request.min_relevance_score is not None else r.min_relevance_score,
     )
 
 
@@ -189,7 +205,10 @@ class SearchResponse(BaseModel):
 
     query: str
     results: list[SearchResult]
-    total_candidates: int = Field(description="Number of candidates after RRF fusion (before MMR/reranking)")
+    total_candidates: int = Field(
+        description="Number of candidates after RRF fusion AND the confidence filter "
+        "(before MMR/reranking, which are currently disabled by default)"
+    )
     timings: dict[str, float] = Field(default_factory=dict, description="Time in seconds for each pipeline stage")
     from_cache: bool = Field(default=False, description="Whether this response came from cache")
 
@@ -213,6 +232,7 @@ def _generate_cache_key(request: SearchRequest, params: _ResolvedParams) -> str:
         str(params.use_reranker),
         str(params.conditional_rerank),
         str(params.confidence_threshold),
+        str(params.min_relevance_score),
     ]
     key_string = "|".join(key_parts)
     return hashlib.md5(key_string.encode()).hexdigest()
@@ -228,7 +248,12 @@ _resources: dict = {}
 
 
 def _get_resources() -> dict:
-    """Lazy-load all indexes and models on first call."""
+    """Lazy-load core indexes/models on first call. The cross-encoder
+    reranker is NOT loaded here — see _get_reranker() below — since
+    config.RETRIEVAL.use_reranker is False by default and this pipeline
+    is currently BM25 + Vector -> WRRF -> confidence filter only. Loading
+    a reranker model that's never actually used would waste startup time
+    and an unnecessary Hugging Face Hub download/model load."""
     if _resources:
         return _resources
 
@@ -251,17 +276,41 @@ def _get_resources() -> dict:
 
     _resources["embed_model"] = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-    print("[retrieval] pre-loading reranker ...")
-    _resources["reranker"] = CrossEncoder(RERANKER_MODEL_NAME)
-
-    print(f"[retrieval] resources loaded in {time.perf_counter() - t0:.1f}s")
+    print(f"[retrieval] resources loaded in {time.perf_counter() - t0:.1f}s "
+          f"(reranker NOT loaded — use_reranker={RETRIEVAL.use_reranker})")
     return _resources
+
+
+_reranker = None
+
+
+def _get_reranker() -> CrossEncoder:
+    """Lazy-load the cross-encoder reranker ONLY on first actual use
+    (i.e. the first time cross_encoder_rerank() runs). With the current
+    default config (use_reranker=False), this never gets called, so the
+    reranker model is never downloaded/loaded at all."""
+    global _reranker
+    if _reranker is None:
+        print("[retrieval] loading reranker (first actual use) ...")
+        t0 = time.perf_counter()
+        _reranker = CrossEncoder(RERANKER_MODEL_NAME)
+        print(f"[retrieval] reranker loaded in {time.perf_counter() - t0:.1f}s")
+    return _reranker
 
 
 def get_embed_model() -> SentenceTransformer:
     """Shared accessor so other modules (evaluation.py) reuse this loaded
     instance instead of loading a second copy of the same model."""
     return _get_resources()["embed_model"]
+
+
+def _embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed a batch of strings with the shared (fine-tuned) embedding
+    model. Used to pass query/product embeddings into feedback.get_boosts()
+    so feedback-query similarity is computed in the same embedding space
+    as product retrieval."""
+    res = _get_resources()
+    return res["embed_model"].encode(texts, normalize_embeddings=True, convert_to_numpy=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -302,9 +351,23 @@ def _passes_filters(chunk: dict, request: SearchRequest) -> bool:
 
 
 def bm25_search(query: str, top_k: int) -> list[tuple[str, float]]:
-    """Score all documents against the query using BM25 and return top-k."""
+    # \"\"\"Score all documents against the query using BM25 and return top-k.
+
+    # The query is first passed through urdu_normalizer.normalize_query(),
+    # which appends the canonical English/roman-urdu term for any roman-urdu
+    # word or known misspelling it recognizes (e.g. "kheema" -> also adds
+    # "qeema"). BM25 has zero tolerance for spelling drift on its own, so
+    # this is the retrieval path that benefits most from expansion — see
+    # config.URDU_NORMALIZATION.enable_for_bm25 to toggle it off.
+    # \"\"\"
     res = _get_resources()
-    query_tokens = tokenize(query)
+
+    if URDU_NORMALIZATION.enable_for_bm25:
+        norm_result = normalize_query(query)
+        query_tokens = tokenize(norm_result.expanded_query)
+    else:
+        query_tokens = tokenize(query)
+
     scores = res["bm25_index"].get_scores(query_tokens)
 
     top_indices = np.argsort(scores)[::-1][:top_k]
@@ -321,9 +384,26 @@ def bm25_search(query: str, top_k: int) -> list[tuple[str, float]]:
 
 
 def vector_search(query: str, top_k: int) -> list[tuple[str, float]]:
-    """Encode the query and find nearest neighbors by cosine similarity."""
+    # \"\"\"Encode the query and find nearest neighbors by cosine similarity.
+
+    # Expansion here is OPTIONAL and independently toggleable from BM25
+    # (config.URDU_NORMALIZATION.enable_for_vector) — the fine-tuned
+    # embedding model already saw ~6,100 roman-urdu/misspelling anchors
+    # during training (grouped_training_data_v2.json), so appending the
+    # canonical term is a smaller, more uncertain lift here than on the
+    # BM25 side. Keep this on by default but re-verify with the eval set
+    # (Phase 1 of the rollout) before assuming it helps rather than
+    # diluting an already-robust embedding.
+    # \"\"\"
     res = _get_resources()
-    q_emb = res["embed_model"].encode([query], normalize_embeddings=True, convert_to_numpy=True)
+
+    if URDU_NORMALIZATION.enable_for_vector:
+        norm_result = normalize_query(query)
+        embed_text = norm_result.expanded_query
+    else:
+        embed_text = query
+
+    q_emb = res["embed_model"].encode([embed_text], normalize_embeddings=True, convert_to_numpy=True)
     scores = (res["embeddings"] @ q_emb.T).squeeze()
 
     top_indices = np.argsort(scores)[::-1][:top_k]
@@ -364,6 +444,34 @@ def weighted_reciprocal_rank_fusion(
     return sorted(wrrf_scores.items(), key=lambda x: x[1], reverse=True)
 
 
+def _filter_candidates_by_confidence(
+    fused: list[tuple[str, float]],
+    vector_results: list[tuple[str, float]],
+    threshold: float,
+    exempt_ids: frozenset[str] | set[str] = frozenset(),
+) -> list[tuple[str, float]]:
+    """
+    Confidence filter applied to EVERY candidate coming out of WRRF fusion —
+    not just the #1 result. Each candidate's confidence is its vector
+    cosine similarity to the query (0.0 if BM25-only, i.e. no semantic
+    support at all). Anything below `threshold` is dropped before it ever
+    reaches metadata filtering, MMR, or reranking.
+
+    `exempt_ids` (typically products with positive feedback for this query)
+    bypass the check entirely — a human already verified relevance, so a
+    middling vector score shouldn't override that signal.
+
+    This is the primary relevance mechanism in the current configuration
+    (BM25 + Vector -> WRRF -> confidence threshold on all candidates),
+    since MMR/reranker are currently disabled by default in config.RETRIEVAL.
+    """
+    vector_score_map = dict(vector_results)
+    return [
+        (doc_id, score) for doc_id, score in fused
+        if doc_id in exempt_ids or vector_score_map.get(doc_id, 0.0) >= threshold
+    ]
+
+
 def _check_stage1_confidence(
     fused_results: list[tuple[str, float]],
     bm25_results: list[tuple[str, float]],
@@ -373,7 +481,8 @@ def _check_stage1_confidence(
 ) -> tuple[bool, str]:
     """
     Evaluates whether Stage 1 retrieval produced a high-confidence match,
-    so the (expensive) cross-encoder can be safely skipped.
+    so the (expensive) cross-encoder can be safely skipped. Only relevant
+    when config.RETRIEVAL.use_reranker=True and conditional_rerank=True.
 
     Returns:
         (is_high_confidence, reason)
@@ -399,7 +508,9 @@ def _check_stage1_confidence(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 2a: Maximal Marginal Relevance (MMR)
+# Stage 2a: Maximal Marginal Relevance (MMR) — currently disabled by default
+# (config.RETRIEVAL.mmr_lambda = 1.0). Fully implemented below so it can be
+# turned back on any time by lowering mmr_lambda in config.py.
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -471,7 +582,9 @@ def mmr_rerank(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 2b: Cross-Encoder Reranking
+# Stage 2b: Cross-Encoder Reranking — currently disabled by default
+# (config.RETRIEVAL.use_reranker = False). Fully implemented below so it
+# can be turned back on any time via config.py.
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -489,7 +602,7 @@ def cross_encoder_rerank(query: str, candidate_ids: list[str], top_k: int) -> li
     score directly comparable to config.RETRIEVAL.min_relevance_score.
     """
     res = _get_resources()
-    reranker = res["reranker"]
+    reranker = _get_reranker()
     chunks_by_id = res["chunks_by_id"]
 
     pairs = []
@@ -517,12 +630,19 @@ def _top_match_confidence(
     reranker_was_run: bool,
 ) -> float:
     """
-    Confidence score for the single best match, used by the relevance gate.
+    Confidence score for the single best surviving match — a final sanity
+    check after Stage 2 (if it ran). Note: the primary relevance filtering
+    now happens earlier in search(), via _filter_candidates_by_confidence()
+    applied to the FULL WRRF candidate pool. This check just re-confirms
+    the top result using the reranker's score when Stage 2 actually ran
+    (a more precise signal than vector similarity alone).
 
     - If the cross-encoder ran, its top score is already a sigmoid-normalized
       relevance probability in [0, 1] — use it directly.
     - Otherwise (reranker disabled, or conditionally skipped), fall back to
-      the top vector cosine similarity as the best available relevance signal.
+      the top vector cosine similarity — which, in the current default
+      configuration, was already checked once for every candidate upstream,
+      so this is a no-op re-confirmation.
     """
     if not final_ids_scores:
         return 0.0
@@ -538,14 +658,20 @@ def _top_match_confidence(
 
 def search(request: SearchRequest) -> SearchResponse:
     """
-    Execute the full two-stage hybrid search pipeline with caching.
+    Execute the full hybrid search pipeline with caching.
 
-    Pipeline:
+    Pipeline (current default configuration — MMR/reranker OFF):
         1. Resolve hyperparameters (request overrides > config.RETRIEVAL)
         2. Check cache
-        3. On miss: BM25 + Vector -> WRRF fusion -> metadata filter
-           -> MMR -> cross-encoder rerank (optional/conditional)
+        3. On miss: BM25 + Vector -> WRRF fusion -> confidence filter
+           (applied to every fused candidate) -> metadata filter
+           -> [MMR -> cross-encoder rerank, if turned on in config.RETRIEVAL]
         4. Cache and return
+
+    MMR and the cross-encoder reranker are fully implemented and wired in
+    (Stage 2 below) but are no-ops in the current default config
+    (mmr_lambda=1.0, use_reranker=False) — flip those in config.py to turn
+    them back on without touching this function.
     """
     params = _resolve_params(request)
     cache_key = _generate_cache_key(request, params)
@@ -569,6 +695,8 @@ def search(request: SearchRequest) -> SearchResponse:
     bm25_results = bm25_search(request.query, top_k=params.bm25_candidates)
     timings["bm25"] = time.perf_counter() - t0
 
+    norm_debug = normalize_query(request.query)
+    timings_extra_urdu_hits = [h.matched_text + "->" + h.canonical for h in norm_debug.hits]
     # ── Stage 1b: Vector ──
     t0 = time.perf_counter()
     vector_results = vector_search(request.query, top_k=params.vector_candidates)
@@ -582,6 +710,49 @@ def search(request: SearchRequest) -> SearchResponse:
     timings["rrf"] = time.perf_counter() - t0
 
     fused = fused[:RETRIEVAL.fusion_top_n]
+
+    # ── Feedback boost ──
+    # Every click/add-to-cart/relevant/irrelevant event for this (or a
+    # similar) query adjusts the product's fused score — positive events
+    # push it up, "irrelevant" pushes it down. A product explicitly marked
+    # "irrelevant" for this query is HARD-EXCLUDED outright, not just
+    # demoted — giving negative feedback should reliably stop a wrong
+    # product from showing up, not just nudge its rank. A product with
+    # strong positive feedback that WRRF/BM25/vector missed entirely is
+    # injected as a new candidate, so add-to-cart/relevant reliably
+    # resurfaces the right product on a similar future query.
+    t0 = time.perf_counter()
+    boosts: dict[str, float] = {}
+    if FEEDBACK.enabled:
+        boosts = feedback.get_boosts(request.query, embed_fn=_embed_texts)
+    positive_boosted_ids = {pid for pid, score in boosts.items() if score > 0}
+    excluded_ids = {pid for pid, score in boosts.items() if score < 0}
+
+    if boosts:
+        fused_map = dict(fused)
+        for product_id, boost_score in boosts.items():
+            if product_id not in chunks_by_id:
+                continue  # stale feedback for a product no longer in the catalogue
+            fused_map[product_id] = fused_map.get(product_id, 0.0) + boost_score * FEEDBACK.boost_weight
+        fused = [(doc_id, score) for doc_id, score in fused_map.items() if doc_id not in excluded_ids]
+        fused.sort(key=lambda x: x[1], reverse=True)
+    timings["feedback_boost"] = time.perf_counter() - t0
+
+    # ── Confidence filter: applied to EVERY WRRF candidate ──
+    # This is the current pipeline's primary relevance mechanism:
+    # BM25 + Vector -> WRRF -> confidence threshold on ALL candidates.
+    # Every fused candidate is checked here — not just whichever one ends
+    # up ranked #1 — so a query with a couple of strong matches and a pile
+    # of weak, semantically-unrelated stragglers doesn't return the
+    # stragglers just because top_k padding needs something to show.
+    # Products with POSITIVE feedback are exempt: a human already verified
+    # relevance, so a middling vector score shouldn't override that.
+    t0 = time.perf_counter()
+    fused = _filter_candidates_by_confidence(
+        fused, vector_results, params.min_relevance_score, exempt_ids=positive_boosted_ids
+    )
+    timings["confidence_filter"] = time.perf_counter() - t0
+
     fused_score_map = dict(fused)
     total_candidates = len(fused)
 
@@ -594,7 +765,7 @@ def search(request: SearchRequest) -> SearchResponse:
     ]
     timings["filtering"] = time.perf_counter() - t0
 
-    # ── Stage 2a: MMR diversity ──
+    # ── Stage 2a: MMR diversity (no-op while mmr_lambda >= 1.0) ──
     t0 = time.perf_counter()
     if params.mmr_lambda >= 1.0:
         # Pure relevance -> MMR would be a no-op, skip the O(n^2) computation.
@@ -608,7 +779,7 @@ def search(request: SearchRequest) -> SearchResponse:
         )
     timings["mmr"] = time.perf_counter() - t0
 
-    # ── Stage 2b: Cross-encoder reranking (optional / conditional) ──
+    # ── Stage 2b: Cross-encoder reranking (no-op while use_reranker=False) ──
     t0 = time.perf_counter()
     skipped_reranker = False
     skip_reason = ""
@@ -642,15 +813,21 @@ def search(request: SearchRequest) -> SearchResponse:
 
     timings["reranker"] = time.perf_counter() - t0
 
-    # ── Relevance gate: reject if even the best match isn't actually relevant ──
-    # This is what turns a query for a product that doesn't exist in the
-    # catalogue into an honest "no results" instead of a forced top-k match.
+    # ── Final confidence re-check on the #1 result ──
+    # In the current default config (reranker off), everything reaching
+    # this point already passed the full-pool confidence filter above, so
+    # this is a no-op re-confirmation. It becomes meaningful again the
+    # moment use_reranker=True, since it then checks the reranker's more
+    # precise score instead. Positively-boosted products remain exempt,
+    # consistent with the earlier filter.
     t0 = time.perf_counter()
+    top_id = final_ids_scores[0][0] if final_ids_scores else None
     top_confidence = _top_match_confidence(final_ids_scores, vector_results, reranker_was_run)
-    if top_confidence < RETRIEVAL.min_relevance_score:
+    top_passes = top_id is not None and (top_id in positive_boosted_ids or top_confidence >= params.min_relevance_score)
+    if not top_passes:
         print(
             f"[relevance-gate] top confidence {top_confidence:.3f} < "
-            f"min_relevance_score {RETRIEVAL.min_relevance_score} -> no results"
+            f"min_relevance_score {params.min_relevance_score} -> no results"
         )
         final_ids_scores = []
     timings["relevance_gate"] = time.perf_counter() - t0
@@ -722,8 +899,9 @@ def main() -> None:
     parser.add_argument("--brand", type=str, default=None, help="Brand filter")
     parser.add_argument("--min-price", type=float, default=None, help="Minimum price")
     parser.add_argument("--max-price", type=float, default=None, help="Maximum price")
+    parser.add_argument("--min-relevance", type=float, default=None, help="Confidence cutoff applied to all WRRF candidates")
     parser.add_argument("--mmr-lambda", type=float, default=None, help="MMR lambda (0=diversity, 1=relevance)")
-    parser.add_argument("--no-rerank", action="store_true", help="Skip cross-encoder reranking")
+    parser.add_argument("--use-rerank", action="store_true", help="Turn ON cross-encoder reranking (off by default)")
     parser.add_argument("--clear-cache", action="store_true", help="Clear the query cache before running")
     parser.add_argument("--show-cache", action="store_true", help="Show cache statistics")
     args = parser.parse_args()
@@ -750,14 +928,15 @@ def main() -> None:
         brand=args.brand,
         min_price=args.min_price,
         max_price=args.max_price,
+        min_relevance_score=args.min_relevance,
         mmr_lambda=args.mmr_lambda,
-        use_reranker=(False if args.no_rerank else None),
+        use_reranker=(True if args.use_rerank else None),
     )
 
     print(f"Searching for: \"{request.query}\"")
     response = search(request)
 
-    print(f"Found {response.total_candidates} candidates after RRF fusion")
+    print(f"Found {response.total_candidates} candidates after WRRF fusion + confidence filter")
     print(f"Returning top {len(response.results)} results  (from_cache={response.from_cache})\n")
 
     for r in response.results:
@@ -769,8 +948,8 @@ def main() -> None:
 
     print("Timings:")
     for stage, elapsed in response.timings.items():
-        print(f"  {stage:>12s}: {elapsed:.4f}s")
-    print(f"  {'TOTAL':>12s}: {sum(response.timings.values()):.4f}s")
+        print(f"  {stage:>18s}: {elapsed:.4f}s")
+    print(f"  {'TOTAL':>18s}: {sum(response.timings.values()):.4f}s")
 
     info = get_cache_info()
     print(f"\nCache Stats: {info['size']}/{info['maxsize']} items, Hit Rate: {info['hit_rate']}")

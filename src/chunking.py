@@ -29,14 +29,13 @@ and handles the real-world messiness that a hand-made sample never has:
 7. `sku` (e.g. "IC-1143194") is used as the chunk id - it's unique across
    all 155k rows and human-readable, unlike `id` or `product_id`.
 
-IMPORTANT GAP TO FLAG: this real dump has NO Urdu-alias column like our
-sample catalogue did. That means the "sons ka pampers" style matching
-we tested earlier will NOT work as well out of the box here - there's
-no "bache ka pamper" text anywhere in this data for BM25 to match
-against. This is a real problem to solve in Step 2 (retrieval), most
-likely by normalizing/translating the query with an LLM before search,
-rather than something Step 1 alone can fix. Flagging so it doesn't
-get lost.
+IMPORTANT GAP (RESOLVED in Step 2): this real dump has NO Urdu-alias
+column like our sample catalogue did, so "sons ka pampers" style
+matching had nothing to match against on the corpus side. This wasn't
+fixable in chunking alone - it's solved at QUERY time instead, in
+urdu_normalizer.py, which expands a roman-urdu/misspelled query with
+its canonical English term before it ever reaches BM25/vector search.
+See retrieval.py's bm25_search()/vector_search() call sites.
 """
 import json
 import re
@@ -44,6 +43,13 @@ import re
 import pandas as pd
 
 from config import CATALOGUE_PATH, CHUNKS_PATH
+
+# OFFLINE / BUILD-TIME SCRIPT: run manually (or in a data pipeline) to
+# (re)generate indexes/<mode>/chunks.jsonl whenever the catalogue CSV
+# changes. Not imported by api.py at runtime — retrieval.py reads the
+# chunks.jsonl file this script produces, not this module directly.
+# (cross_sell.py DOES import load_chunks() from this file at runtime,
+# to read that same already-built chunks.jsonl.)
 
 _HTML_TAG = re.compile(r"<[^>]+>")
 _WHITESPACE = re.compile(r"\s+")
