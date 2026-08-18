@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Naheed Product Search</title>
     <style>
-        /* ────────────────────────────────────────────────────────────── */
-        /* Naheed Brand Colors - NOW RED THEME */
-        /* ────────────────────────────────────────────────────────────── */
         :root {
             --naheed-red: #b91c1c;
             --naheed-red-light: #dc2626;
@@ -18,11 +15,7 @@
             --radius: 12px;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -31,12 +24,8 @@
             padding: 24px;
         }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
+        .container { max-width: 1400px; margin: 0 auto; }
 
-        /* ── Header ── (RED THEME) */
         .header {
             background: linear-gradient(135deg, var(--naheed-red) 0%, var(--naheed-red-light) 100%);
             color: white;
@@ -46,29 +35,12 @@
             box-shadow: var(--shadow-md);
         }
 
-        .header h1 {
-            font-size: 28px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .header h1 { font-size: 28px; font-weight: 700; display: flex; align-items: center; gap: 12px; }
+        .header h1 span { color: #fcd34d; }
+        .header-logo { height: 80px; width: 80px; object-fit: contain; border: none; box-shadow: transparent; }
+        .header p { margin-top: 4px; color: #fee2e2; font-size: 14px; }
 
-        .header h1 span {
-            color: #fcd34d; /* gold accent */
-        }
-
-        .header p {
-            margin-top: 4px;
-            color: #fee2e2;
-            font-size: 14px;
-        }
-
-        /* ── Search Bar ── */
-        .search-wrapper {
-            position: relative;
-            margin-bottom: 16px;
-        }
+        .search-wrapper { position: relative; margin-bottom: 16px; }
 
         .search-bar {
             display: flex;
@@ -79,20 +51,9 @@
             overflow: hidden;
         }
 
-        .search-bar:focus-within {
-            border-color: var(--naheed-red);
-            box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.1);
-        }
+        .search-bar:focus-within { border-color: var(--naheed-red); box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.1); }
 
-        .search-bar input {
-            flex: 1;
-            border: none;
-            padding: 16px 20px;
-            font-size: 16px;
-            outline: none;
-            background: transparent;
-            font-family: inherit;
-        }
+        .search-bar input { flex: 1; border: none; padding: 16px 20px; font-size: 16px; outline: none; background: transparent; font-family: inherit; }
 
         .search-bar button {
             background: var(--naheed-red);
@@ -107,11 +68,8 @@
             white-space: nowrap;
         }
 
-        .search-bar button:hover {
-            background: var(--naheed-red-light);
-        }
+        .search-bar button:hover { background: var(--naheed-red-light); }
 
-        /* ── Autocomplete Dropdown ── */
         .autocomplete-dropdown {
             position: absolute;
             top: 100%;
@@ -127,57 +85,18 @@
             display: none;
         }
 
-        .autocomplete-dropdown.active {
-            display: block;
-        }
+        .autocomplete-dropdown.active { display: block; }
 
-        .autocomplete-item {
-            padding: 12px 20px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: background 0.15s;
-        }
+        .autocomplete-item { padding: 12px 20px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background 0.15s; }
+        .autocomplete-item:hover { background: #f0f4f8; }
+        .autocomplete-item .icon { color: #94a3b8; }
 
-        .autocomplete-item:hover {
-            background: #f0f4f8;
-        }
+        .filters-bar { background: white; padding: 16px 20px; border-radius: var(--radius); margin-bottom: 24px; border: 1px solid #e2e8f0; }
+        .filters-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+        .filter-group { display: flex; align-items: center; gap: 8px; }
+        .filter-group label { font-size: 14px; font-weight: 500; color: #475569; }
 
-        .autocomplete-item .icon {
-            color: #94a3b8;
-        }
-
-        /* ── Filters ── */
-        .filters-bar {
-            background: white;
-            padding: 16px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 24px;
-            border: 1px solid #e2e8f0;
-        }
-
-        .filters-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
-            align-items: center;
-        }
-
-        .filter-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .filter-group label {
-            font-size: 14px;
-            font-weight: 500;
-            color: #475569;
-        }
-
-        .filter-group select,
-        .filter-group input {
+        .filter-group select, .filter-group input {
             padding: 6px 12px;
             border: 1px solid #d1d5db;
             border-radius: 6px;
@@ -186,39 +105,13 @@
             font-family: inherit;
         }
 
-        .filter-group input[type="number"] {
-            width: 80px;
-        }
+        .filter-group input[type="number"] { width: 80px; }
+        .filter-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--naheed-red); }
 
-        .filter-group input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--naheed-red);
-        }
+        .results-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; font-size: 14px; color: #64748b; }
+        .results-stats .timing-badge { background: #f1f5f9; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
 
-        /* ── Results Stats ── */
-        .results-stats {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            color: #64748b;
-        }
-
-        .results-stats .timing-badge {
-            background: #f1f5f9;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 12px;
-        }
-
-        /* ── Product Grid ── */
-        .product-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 24px;
-        }
+        .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
 
         .product-card {
             background: white;
@@ -229,11 +122,7 @@
             position: relative;
         }
 
-        .product-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
-            cursor: pointer;
-        }
+        .product-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); cursor: pointer; }
 
         .product-image {
             height: 200px;
@@ -246,20 +135,9 @@
             position: relative;
         }
 
-        .product-image img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            padding: 8px;
-            transition: transform 0.3s ease;
-            background: white;
-        }
+        .product-image img { width: 100%; height: 100%; object-fit: contain; padding: 8px; transition: transform 0.3s ease; background: white; }
+        .product-card:hover .product-image img { transform: scale(1.05); }
 
-        .product-card:hover .product-image img {
-            transform: scale(1.05);
-        }
-
-        /* Stock Badge on Image */
         .product-image .stock-badge {
             position: absolute;
             top: 12px;
@@ -273,27 +151,11 @@
             letter-spacing: 0.5px;
         }
 
-        .product-image .stock-badge.in-stock {
-            background: rgba(34, 197, 94, 0.9);
-            color: white;
-        }
+        .product-image .stock-badge.in-stock { background: rgba(34, 197, 94, 0.9); color: white; }
+        .product-image .stock-badge.out-of-stock { background: rgba(239, 68, 68, 0.9); color: white; }
 
-        .product-image .stock-badge.out-of-stock {
-            background: rgba(239, 68, 68, 0.9);
-            color: white;
-        }
-
-        .product-body {
-            padding: 16px;
-        }
-
-        .product-brand {
-            font-size: 12px;
-            color: #94a3b8;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 600;
-        }
+        .product-body { padding: 16px; }
+        .product-brand { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
 
         .product-name {
             font-size: 16px;
@@ -306,92 +168,23 @@
             overflow: hidden;
         }
 
-        .product-category {
-            font-size: 12px;
-            color: #64748b;
-            margin-bottom: 8px;
-        }
+        .product-category { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+        .product-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+        .product-price { font-size: 20px; font-weight: 700; color: var(--naheed-red); }
+        .product-stock { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 12px; }
+        .product-stock.in-stock { background: #dcfce7; color: #15803d; }
+        .product-stock.out-of-stock { background: #fee2e2; color: #b91c1c; }
+        .product-rank { font-size: 11px; color: #cbd5e1; text-align: right; margin-top: 8px; }
 
-        .product-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 10px;
-        }
+        .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
+        .skeleton-card { background: white; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); height: 320px; }
+        .skeleton-image { height: 200px; background: #e2e8f0; animation: pulse 1.5s ease-in-out infinite; }
+        .skeleton-body { padding: 16px; }
+        .skeleton-line { height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 8px; animation: pulse 1.5s ease-in-out infinite; }
+        .skeleton-line.short { width: 60%; }
 
-        .product-price {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--naheed-red);
-        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-        .product-stock {
-            font-size: 12px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 12px;
-        }
-
-        .product-stock.in-stock {
-            background: #dcfce7;
-            color: #15803d;
-        }
-
-        .product-stock.out-of-stock {
-            background: #fee2e2;
-            color: #b91c1c;
-        }
-
-        .product-rank {
-            font-size: 11px;
-            color: #cbd5e1;
-            text-align: right;
-            margin-top: 8px;
-        }
-
-        /* ── Loading ── */
-        .loading-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 24px;
-        }
-
-        .skeleton-card {
-            background: white;
-            border-radius: var(--radius);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            height: 320px;
-        }
-
-        .skeleton-image {
-            height: 200px;
-            background: #e2e8f0;
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-
-        .skeleton-body {
-            padding: 16px;
-        }
-
-        .skeleton-line {
-            height: 14px;
-            background: #e2e8f0;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-
-        .skeleton-line.short {
-            width: 60%;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        /* ── Responsive ── */
         @media (max-width: 768px) {
             .header h1 { font-size: 22px; }
             .search-bar input { padding: 14px 16px; font-size: 14px; }
@@ -406,367 +199,139 @@
             .product-image { height: 180px; }
         }
 
-        /* ── No Results ── */
-        .no-results {
-            text-align: center;
-            padding: 60px 20px;
-            color: #64748b;
-        }
-
+        .no-results { text-align: center; padding: 60px 20px; color: #64748b; }
         .no-results h3 { font-size: 20px; margin-bottom: 8px; }
         .no-results p { font-size: 14px; }
 
-        /* ────────────────────────────────────────────────────────────── */
-        /* CHATBOT FLOATING ICON & POPUP - RED THEME */
-        /* ────────────────────────────────────────────────────────────── */
-        .chatbot-float {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            z-index: 9999;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .chatbot-float:hover {
-            transform: scale(1.1);
-        }
-
-        .chatbot-float .icon-wrapper {
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--naheed-red) 0%, var(--naheed-red-light) 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 15px rgba(185, 28, 28, 0.3);
-            border: 3px solid #ffffff;
-            transition: all 0.3s ease;
-        }
-
-        .chatbot-float .icon-wrapper:hover {
-            box-shadow: 0 8px 30px rgba(185, 28, 28, 0.5);
-        }
-
-        .chatbot-float .icon-wrapper svg {
-            width: 40px;
-            height: 40px;
-            fill: #ffffff;
-        }
-
-        .chatbot-float .notification-dot {
-            position: absolute;
-            top: -5px;
-            right: -5px;
-            width: 20px;
-            height: 20px;
-            background: #ef4444;
-            border-radius: 50%;
-            border: 3px solid #ffffff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 10px;
-            font-weight: 700;
-            animation: pulse-dot 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-
-        .chatbot-float .tooltip {
-            position: absolute;
-            bottom: 80px;
-            right: 0;
-            background: #1f2937;
-            color: white;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 13px;
-            white-space: nowrap;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            pointer-events: none;
-        }
-
-        .chatbot-float:hover .tooltip {
-            opacity: 1;
-        }
-
-        .chatbot-float .tooltip::after {
-            content: '';
-            position: absolute;
-            bottom: -8px;
-            right: 25px;
-            border-left: 8px solid transparent;
-            border-right: 8px solid transparent;
-            border-top: 8px solid #1f2937;
-        }
-
-        /* Chat Popup */
-        .chat-popup {
-            position: fixed;
-            bottom: 120px;
-            right: 30px;
-            width: 400px;
-            max-width: calc(100vw - 60px);
-            height: 500px;
-            max-height: calc(100vh - 180px);
+        /* ── Cross-Sell / Recommendations ── */
+        .cross-sell-section {
             background: white;
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-md);
-            display: none;
-            flex-direction: column;
-            z-index: 9998;
-            overflow: hidden;
             border: 1px solid #e2e8f0;
-            transition: all 0.3s ease;
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-sm);
+            display: none;
         }
 
-        .chat-popup.active {
-            display: flex;
+        .cross-sell-section.active { display: block; animation: cross-sell-in 0.25s ease; }
+
+        @keyframes cross-sell-in {
+            from { opacity: 0; transform: translateY(-6px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
-        .chat-header {
-            background: linear-gradient(135deg, var(--naheed-red) 0%, var(--naheed-red-light) 100%);
-            color: white;
-            padding: 16px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-        }
+        .cross-sell-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        .cross-sell-header h3 { font-size: 15px; font-weight: 700; color: #1a202c; }
 
-        .chat-header h3 {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 0;
-        }
-
-        .chat-header .close-btn {
+        .cross-sell-header .close-cross-sell {
             background: none;
             border: none;
-            color: white;
-            font-size: 24px;
+            color: #94a3b8;
             cursor: pointer;
+            font-size: 18px;
             line-height: 1;
             padding: 0 4px;
-            opacity: 0.8;
-            transition: opacity 0.2s;
         }
 
-        .chat-header .close-btn:hover {
-            opacity: 1;
-        }
+        .cross-sell-header .close-cross-sell:hover { color: #475569; }
 
-        .chat-messages {
-            flex: 1;
-            padding: 16px;
-            overflow-y: auto;
-            background: #f8fafc;
-        }
+        .cross-sell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
 
-        .chat-message {
-            margin-bottom: 12px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .chat-message.user {
-            align-items: flex-end;
-        }
-
-        .chat-message.bot {
-            align-items: flex-start;
-        }
-
-        .chat-message .bubble {
-            max-width: 80%;
-            padding: 10px 14px;
-            border-radius: 16px;
-            font-size: 14px;
-            line-height: 1.5;
-            word-wrap: break-word;
-        }
-
-        .chat-message.user .bubble {
-            background: var(--naheed-red);
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-
-        .chat-message.bot .bubble {
-            background: white;
-            color: #1a202c;
+        .cross-sell-card {
             border: 1px solid #e2e8f0;
-            border-bottom-left-radius: 4px;
+            border-radius: 8px;
+            padding: 10px;
+            background: #fafbfc;
+            position: relative;
+            transition: box-shadow 0.2s;
         }
 
-        /* ── Clickable Product Links in Chat (RED) ── */
-        .product-link {
-            color: #dc2626;
-            font-weight: 700;
-            text-decoration: underline;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            background: #fef2f2;
-            padding: 0 4px;
-            border-radius: 4px;
-        }
+        .cross-sell-card:hover { box-shadow: var(--shadow-sm); }
 
-        .product-link:hover {
-            color: #b91c1c;
-            background: #fee2e2;
-            text-decoration: underline;
-        }
-
-        .product-link:active {
-            color: #7f1d1d;
-            transform: scale(0.95);
-        }
-
-        .chat-input-area {
+        .cross-sell-card .cs-image {
+            height: 85px;
+            background: #f1f5f9;
+            border-radius: 6px;
             display: flex;
-            padding: 12px;
-            border-top: 1px solid #e2e8f0;
-            background: white;
-            flex-shrink: 0;
-            gap: 8px;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            margin-bottom: 8px;
         }
 
-        .chat-input-area input {
-            flex: 1;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-            padding: 8px 12px;
-            font-size: 14px;
-            outline: none;
-            font-family: inherit;
+        .cross-sell-card .cs-image img { width: 100%; height: 100%; object-fit: contain; padding: 4px; background: white; }
+
+        .cross-sell-card .cs-name {
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 1.3;
+            margin-bottom: 4px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            min-height: 32px;
         }
 
-        .chat-input-area input:focus {
-            border-color: var(--naheed-red);
-            box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+        .cross-sell-card .cs-price { font-size: 13px; font-weight: 700; color: var(--naheed-red); }
+
+        .cross-sell-card .cs-badge {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: #fef3c7;
+            color: #92400e;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 10px;
+            z-index: 2;
         }
 
-        .chat-input-area button {
-            background: var(--naheed-red);
-            color: white;
+        .cross-sell-card .cs-add-btn {
+            width: 100%;
+            margin-top: 6px;
+            padding: 5px;
             border: none;
-            border-radius: 8px;
-            padding: 8px 16px;
-            font-size: 14px;
+            border-radius: 5px;
+            background: #111827;
+            color: white;
+            font-size: 11.5px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s;
             font-family: inherit;
-            white-space: nowrap;
         }
 
-        .chat-input-area button:hover {
-            background: var(--naheed-red-light);
-        }
+        .cross-sell-card .cs-add-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .cross-sell-empty { color: #94a3b8; font-size: 13px; padding: 8px 0; }
 
-        .chat-input-area button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        /* Typing indicator */
-        .typing-indicator {
-            display: flex;
-            gap: 4px;
-            padding: 10px 14px;
-            background: white;
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            border-bottom-left-radius: 4px;
-            align-items: center;
-        }
-
-        .typing-indicator span {
-            width: 8px;
-            height: 8px;
-            background: #94a3b8;
-            border-radius: 50%;
-            animation: typing-bounce 1.4s infinite both;
-        }
-
-        .typing-indicator span:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-        .typing-indicator span:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes typing-bounce {
-            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-
-        /* Responsive chat popup */
-        @media (max-width: 640px) {
-            .chat-popup {
-                bottom: 100px;
-                right: 10px;
-                width: calc(100vw - 20px);
-                height: 60vh;
-                max-height: calc(100vh - 120px);
-            }
-            .chatbot-float .icon-wrapper {
-                width: 60px;
-                height: 60px;
-            }
-            .chatbot-float .icon-wrapper svg {
-                width: 32px;
-                height: 32px;
-            }
-            .chatbot-float {
-                bottom: 20px;
-                right: 20px;
-            }
+        @media (max-width: 480px) {
+            .cross-sell-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
         }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <!-- Header -->
     <div class="header">
-        <h1>🛒 Naheed <span>Product</span> Search</h1>
-        <p>Find products across 155,000+ items with hybrid search</p>
+        <h1><img src="unnamed.png" alt="Naheed Logo" class="header-logo"> Naheed <span>Product</span> Search</h1>
+        <p>Find products across 2000+ items with hybrid search</p>
     </div>
 
-    <!-- Search Bar -->
     <div class="search-wrapper">
         <div class="search-bar">
-            <input
-                type="text"
-                id="searchInput"
-                placeholder="Search for products... (e.g., 'pampers diapers', 'shampoo')"
-                autocomplete="off"
-            />
+            <input type="text" id="searchInput" placeholder="Search for products... (e.g., 'pampers diapers', 'shampoo')" autocomplete="off" />
             <button id="searchButton">Search</button>
         </div>
-
-        <!-- Autocomplete Dropdown -->
         <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
     </div>
 
-    <!-- Filters -->
     <div class="filters-bar">
         <div class="filters-row">
             <div class="filter-group">
-                <label>
-                    <input type="checkbox" id="inStockFilter" />
-                    In Stock Only
-                </label>
+                <label><input type="checkbox" id="inStockFilter" /> In Stock Only</label>
             </div>
-
             <div class="filter-group">
                 <label for="categoryFilter">Category</label>
                 <select id="categoryFilter">
@@ -776,7 +341,6 @@
                     <option value="Beauty">Beauty</option>
                 </select>
             </div>
-
             <div class="filter-group">
                 <label for="brandFilter">Brand</label>
                 <select id="brandFilter">
@@ -786,37 +350,40 @@
                     <option value="Surf">Surf</option>
                 </select>
             </div>
-
             <div class="filter-group">
                 <label>Price</label>
                 <input type="number" id="minPrice" placeholder="Min" />
                 <span>—</span>
                 <input type="number" id="maxPrice" placeholder="Max" />
             </div>
-
-            <button id="clearFilters" style="
-                background: none;
-                border: none;
-                color: #94a3b8;
-                cursor: pointer;
-                font-size: 13px;
-                font-family: inherit;
-            ">
-                Clear All
-            </button>
+            <button id="clearFilters" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 13px; font-family: inherit;">Clear All</button>
         </div>
     </div>
 
-    <!-- Results Stats -->
+    <!-- Cross-sell: related to the current search's top result -->
+    <div class="cross-sell-section" id="searchCrossSell">
+        <div class="cross-sell-header">
+            <h3>🔗 Frequently bought with your top result</h3>
+        </div>
+        <div class="cross-sell-grid" id="searchCrossSellGrid"></div>
+    </div>
+
+    <!-- Cross-sell: triggered by "Add to Cart" -->
+    <div class="cross-sell-section" id="cartCrossSell">
+        <div class="cross-sell-header">
+            <h3 id="cartCrossSellTitle">🛍️ Frequently bought together</h3>
+            <button class="close-cross-sell" id="closeCartCrossSell" type="button">✕</button>
+        </div>
+        <div class="cross-sell-grid" id="cartCrossSellGrid"></div>
+    </div>
+
     <div class="results-stats" id="resultsStats" style="display: none;">
         <span id="resultCount">0 products found</span>
         <span class="timing-badge" id="timingInfo">BM25: 0s · Vector: 0s · Rerank: 0s</span>
     </div>
 
-    <!-- Product Grid -->
     <div id="productGrid" class="product-grid"></div>
 
-    <!-- Loading Skeleton -->
     <div id="loadingGrid" class="loading-grid" style="display: none;">
         <div class="skeleton-card"><div class="skeleton-image"></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
         <div class="skeleton-card"><div class="skeleton-image"></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
@@ -826,56 +393,15 @@
         <div class="skeleton-card"><div class="skeleton-image"></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
     </div>
 
-    <!-- No Results -->
     <div id="noResults" class="no-results" style="display: none;">
         <h3>🔍 No products found</h3>
         <p>Try adjusting your filters or search terms</p>
     </div>
 </div>
 
-<!-- ────────────────────────────────────────────────────────────────────────── -->
-<!-- CHATBOT FLOATING ICON -->
-<!-- ────────────────────────────────────────────────────────────────────────── -->
-<div class="chatbot-float" id="chatbotIcon">
-    <div class="icon-wrapper">
-        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12zM7 9h10v2H7zm0 4h7v2H7z"/>
-        </svg>
-    </div>
-    <div class="notification-dot">1</div>
-    <div class="tooltip">💬 Ask about products</div>
-</div>
-
-<!-- ────────────────────────────────────────────────────────────────────────── -->
-<!-- CHAT POPUP -->
-<!-- ────────────────────────────────────────────────────────────────────────── -->
-<div class="chat-popup" id="chatPopup">
-    <div class="chat-header">
-        <h3>💬 Naheed Assistant</h3>
-        <button class="close-btn" id="closeChat">✕</button>
-    </div>
-    <div class="chat-messages" id="chatMessages">
-        <div class="chat-message bot">
-            <div class="bubble">👋 Hello! I'm your Naheed shopping assistant. Ask me anything about products, prices, or stock availability.</div>
-        </div>
-    </div>
-    <div class="chat-input-area">
-        <input type="text" id="chatInput" placeholder="Type your question..." />
-        <button id="chatSendBtn">Send</button>
-    </div>
-</div>
-
 <script>
-    // ──────────────────────────────────────────────────────────────────────────
-    // Configuration
-    // ──────────────────────────────────────────────────────────────────────────
-
     const API_URL = 'http://localhost:8000/api';
     const DEBOUNCE_DELAY = 300;
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // DOM References
-    // ──────────────────────────────────────────────────────────────────────────
 
     const searchInput = document.getElementById('searchInput');
     const searchButton = document.getElementById('searchButton');
@@ -894,18 +420,6 @@
     const maxPrice = document.getElementById('maxPrice');
     const clearFiltersBtn = document.getElementById('clearFilters');
 
-    // ── Chat elements ──
-    const chatbotIcon = document.getElementById('chatbotIcon');
-    const chatPopup = document.getElementById('chatPopup');
-    const closeChat = document.getElementById('closeChat');
-    const chatMessages = document.getElementById('chatMessages');
-    const chatInput = document.getElementById('chatInput');
-    const chatSendBtn = document.getElementById('chatSendBtn');
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // State
-    // ──────────────────────────────────────────────────────────────────────────
-
     let currentQuery = '';
     let debounceTimer = null;
     let isSearching = false;
@@ -919,12 +433,6 @@
             max_price: maxPrice.value ? Number(maxPrice.value) : undefined,
         };
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Image Mapping (SKU → real product image URL)
-    // Generated by src/build_image_mapping.py from data/products_full.jsonl —
-    // rerun that script if the catalogue or product images change.
-    // ──────────────────────────────────────────────────────────────────────────
 
     let imageMapping = {};
     const FALLBACK_IMAGE = 'images/placeholder.jpg';
@@ -949,16 +457,8 @@
 
     loadImageMapping();
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // API Calls
-    // ──────────────────────────────────────────────────────────────────────────
-
     async function searchProducts(query, filters, topK = 10) {
-        const params = new URLSearchParams({
-            q: query,
-            top_k: String(topK),
-        });
-
+        const params = new URLSearchParams({ q: query, top_k: String(topK) });
         if (filters.in_stock !== undefined) params.append('in_stock', String(filters.in_stock));
         if (filters.category) params.append('category', filters.category);
         if (filters.brand) params.append('brand', filters.brand);
@@ -976,135 +476,47 @@
         return response.json();
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Chat Helper Functions
-    // ──────────────────────────────────────────────────────────────────────────
-
-    function renderAnswerWithClickableProducts(answer, products) {
-        if (!products || products.length === 0) return answer.replace(/\n/g, '<br>');
-
-        // Build a map of product name → product object
-        const productMap = {};
-        products.forEach(p => {
-            productMap[p.name] = p;
-        });
-
-        // Sort product names by length descending to avoid partial replacements
-        const sortedNames = Object.keys(productMap).sort((a, b) => b.length - a.length);
-
-        let html = answer;
-
-        // Replace each product name with a clickable span
-        sortedNames.forEach(name => {
-            const product = productMap[name];
-            // Escape special regex characters in product name
-            const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(`\\b${escapedName}\\b`, 'g');
-            // Store product data as JSON in data attribute
-            const dataAttr = JSON.stringify(product).replace(/'/g, "&apos;");
-            const replacement = `<span class="product-link" data-product='${dataAttr}'>${name}</span>`;
-            html = html.replace(regex, replacement);
-        });
-
-        // Convert newlines to <br> for better display
-        html = html.replace(/\n/g, '<br>');
-        return html;
+    async function fetchCrossSell(sku, topN = 5) {
+        const response = await fetch(`${API_URL}/cross-sell?sku=${encodeURIComponent(sku)}&top_n=${topN}`);
+        if (!response.ok) throw new Error(`Cross-sell API error: ${response.status}`);
+        return response.json();
     }
 
-    function attachProductLinkClicks() {
-        document.querySelectorAll('.product-link').forEach(el => {
-            // Remove old listeners to avoid duplicates
-            el.removeEventListener('click', el._clickHandler);
-            
-            const handler = function(e) {
+    function renderCrossSellGrid(gridEl, suggestions) {
+        if (!suggestions || suggestions.length === 0) {
+            gridEl.innerHTML = '<p class="cross-sell-empty">No strong pairing data yet for this product.</p>';
+            return;
+        }
+
+        gridEl.innerHTML = suggestions.map(s => {
+            const imagePath = getImagePath(s.sku);
+            const product = { id: s.sku, name: s.name, brand: s.brand, price: s.price, in_stock: s.in_stock };
+            const dataAttr = JSON.stringify(product).replace(/'/g, '&apos;');
+
+            return `
+                <div class="cross-sell-card">
+                    <span class="cs-badge">${s.bought_percent.toFixed(0)}% together</span>
+                    <div class="cs-image">
+                        <img src="${imagePath}" alt="${s.name}" onerror="this.src='${FALLBACK_IMAGE}'; this.onerror=null;" loading="lazy" />
+                    </div>
+                    <div class="cs-name">${s.name}</div>
+                    <div class="cs-price">${s.price ? `Rs. ${Number(s.price).toLocaleString()}` : 'Price N/A'}</div>
+                    <button class="cs-add-btn" type="button" data-product='${dataAttr}' ${s.in_stock ? '' : 'disabled'}>
+                        ${s.in_stock ? '+ Add' : 'Out of Stock'}
+                    </button>
+                </div>
+            `;
+        }).join('');
+
+        gridEl.querySelectorAll('.cs-add-btn').forEach(btn => {
+            if (btn.disabled) return;
+            btn.addEventListener('click', async function (e) {
                 e.stopPropagation();
-                try {
-                    const product = JSON.parse(this.dataset.product);
-                    // Trigger a search for the product name and scroll to results
-                    searchInput.value = product.name;
-                    performSearch(product.name, true);
-                } catch (err) {
-                    console.error('Error clicking product:', err);
-                }
-            };
-            
-            el._clickHandler = handler;
-            el.addEventListener('click', handler);
+                const product = JSON.parse(this.dataset.product);
+                await onAddToCart(product, this);
+            });
         });
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Chat Functions
-    // ──────────────────────────────────────────────────────────────────────────
-
-    function addChatMessage(type, content, isHtml = false) {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `chat-message ${type}`;
-        const bubble = document.createElement('div');
-        bubble.className = 'bubble';
-        if (isHtml) {
-            bubble.innerHTML = content;
-        } else {
-            bubble.textContent = content;
-        }
-        msgDiv.appendChild(bubble);
-        chatMessages.appendChild(msgDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-
-    function showTyping() {
-        const typingDiv = document.createElement('div');
-        typingDiv.className = 'chat-message bot';
-        typingDiv.id = 'typingIndicator';
-        const bubble = document.createElement('div');
-        bubble.className = 'typing-indicator';
-        bubble.innerHTML = '<span></span><span></span><span></span>';
-        typingDiv.appendChild(bubble);
-        chatMessages.appendChild(typingDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-
-    function hideTyping() {
-        const typing = document.getElementById('typingIndicator');
-        if (typing) typing.remove();
-    }
-
-    async function sendChatMessage() {
-        const message = chatInput.value.trim();
-        if (!message) return;
-
-        addChatMessage('user', message);
-        chatInput.value = '';
-        chatSendBtn.disabled = true;
-        showTyping();
-
-        try {
-            const response = await fetch(`${API_URL}/chat?query=${encodeURIComponent(message)}&top_k=5`);
-            if (!response.ok) throw new Error(`Chat API error: ${response.status}`);
-            const data = await response.json();
-
-            hideTyping();
-
-            // Render the answer with clickable products
-            const htmlContent = renderAnswerWithClickableProducts(data.answer, data.products);
-            addChatMessage('bot', htmlContent, true);
-            
-            // Attach click events to the newly added product links
-            attachProductLinkClicks();
-
-        } catch (error) {
-            hideTyping();
-            addChatMessage('bot', `⚠️ Error: ${error.message}`);
-            console.error('Chat error:', error);
-        } finally {
-            chatSendBtn.disabled = false;
-            chatInput.focus();
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Rendering Functions (Search)
-    // ──────────────────────────────────────────────────────────────────────────
 
     function renderProducts(data) {
         loadingGrid.style.display = 'none';
@@ -1114,6 +526,7 @@
             noResults.style.display = 'block';
             productGrid.innerHTML = '';
             resultsStats.style.display = 'none';
+            document.getElementById('searchCrossSell').classList.remove('active');
             return;
         }
 
@@ -1137,12 +550,7 @@
             return `
                 <div class="product-card">
                     <div class="product-image">
-                        <img 
-                            src="${imagePath}" 
-                            alt="${product.name}"
-                            onerror="this.src='${fallbackImage}'; this.onerror=null;"
-                            loading="lazy"
-                        />
+                        <img src="${imagePath}" alt="${product.name}" onerror="this.src='${fallbackImage}'; this.onerror=null;" loading="lazy" />
                         <span class="stock-badge ${product.in_stock ? 'in-stock' : 'out-of-stock'}">
                             ${product.in_stock ? '● In Stock' : '● Out of Stock'}
                         </span>
@@ -1157,12 +565,7 @@
                                 ${product.in_stock ? '🟢 In Stock' : '🔴 Out of Stock'}
                             </span>
                         </div>
-                        <button
-                            class="add-to-cart-btn"
-                            type="button"
-                            data-product='${dataAttr}'
-                            style="width:100%;margin-top:8px;padding:8px 12px;border:none;border-radius:6px;background:#111827;color:#fff;cursor:pointer;font-size:0.9rem;"
-                        >
+                        <button class="add-to-cart-btn" type="button" data-product='${dataAttr}' style="width:100%;margin-top:8px;padding:8px 12px;border:none;border-radius:6px;background:#111827;color:#fff;cursor:pointer;font-size:0.9rem;">
                             🛒 Add to Cart
                         </button>
                         <div class="product-rank">#${product.rank}</div>
@@ -1172,11 +575,16 @@
         }).join('');
 
         attachAddToCartClicks();
-    }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Feedback: Add to Cart -> logs (query, product) as a relevance signal
-    // ──────────────────────────────────────────────────────────────────────────
+        const searchCrossSellPanel = document.getElementById('searchCrossSell');
+        const searchCrossSellGrid = document.getElementById('searchCrossSellGrid');
+        if (data.cross_sell && data.cross_sell.length > 0) {
+            renderCrossSellGrid(searchCrossSellGrid, data.cross_sell);
+            searchCrossSellPanel.classList.add('active');
+        } else {
+            searchCrossSellPanel.classList.remove('active');
+        }
+    }
 
     async function submitFeedback(query, productId, eventType) {
         try {
@@ -1193,35 +601,57 @@
         }
     }
 
+    async function onAddToCart(product, buttonEl) {
+        const originalText = buttonEl.textContent;
+        buttonEl.disabled = true;
+        buttonEl.textContent = 'Adding...';
+
+        const result = await submitFeedback(currentQuery, product.id, 'add_to_cart');
+
+        if (result) {
+            buttonEl.textContent = '✓ Added';
+            buttonEl.style.background = '#16a34a';
+        } else {
+            buttonEl.textContent = originalText;
+        }
+
+        setTimeout(() => {
+            buttonEl.textContent = originalText;
+            buttonEl.style.background = '#111827';
+            buttonEl.disabled = false;
+        }, 1500);
+
+        try {
+            const csData = await fetchCrossSell(product.id, 5);
+            const panel = document.getElementById('cartCrossSell');
+            const grid = document.getElementById('cartCrossSellGrid');
+            const title = document.getElementById('cartCrossSellTitle');
+
+            if (csData.suggestions && csData.suggestions.length > 0) {
+                title.textContent = `🛍️ Frequently bought with ${product.name}`;
+                renderCrossSellGrid(grid, csData.suggestions);
+                panel.classList.add('active');
+                panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } else {
+                panel.classList.remove('active');
+            }
+        } catch (error) {
+            console.warn('⚠️ Cross-sell fetch failed:', error);
+        }
+    }
+
+    document.getElementById('closeCartCrossSell').addEventListener('click', () => {
+        document.getElementById('cartCrossSell').classList.remove('active');
+    });
+
     function attachAddToCartClicks() {
         document.querySelectorAll('.add-to-cart-btn').forEach(btn => {
             btn.removeEventListener('click', btn._clickHandler);
-
             const handler = async function (e) {
                 e.stopPropagation();
                 const product = JSON.parse(this.dataset.product);
-                const originalText = this.textContent;
-
-                this.disabled = true;
-                this.textContent = 'Adding...';
-
-                const result = await submitFeedback(currentQuery, product.id, 'add_to_cart');
-
-                if (result) {
-                    this.textContent = '✓ Added';
-                    this.style.background = '#16a34a';
-                } else {
-                    this.textContent = originalText;
-                    this.disabled = false;
-                }
-
-                setTimeout(() => {
-                    this.textContent = originalText;
-                    this.style.background = '#111827';
-                    this.disabled = false;
-                }, 1500);
+                await onAddToCart(product, this);
             };
-
             btn._clickHandler = handler;
             btn.addEventListener('click', handler);
         });
@@ -1260,10 +690,6 @@
         resultsStats.style.display = 'none';
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Search Logic (scrollToResults)
-    // ──────────────────────────────────────────────────────────────────────────
-
     async function performSearch(query, scrollToResults = false) {
         if (!query || query.trim().length === 0) {
             productGrid.innerHTML = '';
@@ -1282,29 +708,22 @@
             const data = await searchProducts(trimmedQuery, filters, 10);
             renderProducts(data);
 
-            // ── Scroll and highlight if requested ──
             if (scrollToResults) {
-                // Scroll smoothly to the product grid
-                document.getElementById('productGrid').scrollIntoView({ 
-                    behavior: 'smooth', 
-                    block: 'start' 
-                });
+                document.getElementById('productGrid').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-                // Highlight the first product card
                 setTimeout(() => {
                     const firstCard = document.querySelector('.product-card');
                     if (firstCard) {
                         firstCard.style.transition = 'box-shadow 0.3s ease, transform 0.3s ease';
                         firstCard.style.boxShadow = '0 0 0 4px #dc2626, 0 8px 25px rgba(220, 38, 38, 0.3)';
                         firstCard.style.transform = 'scale(1.02)';
-                        
-                        // Remove highlight after 3 seconds
+
                         setTimeout(() => {
                             firstCard.style.boxShadow = '';
                             firstCard.style.transform = '';
                         }, 3000);
                     }
-                }, 500); // Wait for render to complete
+                }, 500);
             }
 
         } catch (error) {
@@ -1334,17 +753,10 @@
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Event Handlers
-    // ──────────────────────────────────────────────────────────────────────────
-
-    // Search input with debounce
     searchInput.addEventListener('input', (e) => {
         const value = e.target.value;
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            handleAutocomplete(value);
-        }, DEBOUNCE_DELAY);
+        debounceTimer = setTimeout(() => { handleAutocomplete(value); }, DEBOUNCE_DELAY);
     });
 
     searchInput.addEventListener('keydown', (e) => {
@@ -1367,15 +779,11 @@
     });
 
     [inStockFilter, categoryFilter, brandFilter, minPrice, maxPrice].forEach(el => {
-        el.addEventListener('change', () => {
-            if (currentQuery) performSearch(currentQuery, false);
-        });
+        el.addEventListener('change', () => { if (currentQuery) performSearch(currentQuery, false); });
         if (el.type === 'number') {
             el.addEventListener('input', () => {
                 clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => {
-                    if (currentQuery) performSearch(currentQuery, false);
-                }, 400);
+                debounceTimer = setTimeout(() => { if (currentQuery) performSearch(currentQuery, false); }, 400);
             });
         }
     });
@@ -1388,34 +796,6 @@
         maxPrice.value = '';
         if (currentQuery) performSearch(currentQuery, false);
     });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Chatbot Events
-    // ──────────────────────────────────────────────────────────────────────────
-
-    chatbotIcon.addEventListener('click', () => {
-        chatPopup.classList.toggle('active');
-        if (chatPopup.classList.contains('active')) {
-            chatInput.focus();
-        }
-    });
-
-    closeChat.addEventListener('click', () => {
-        chatPopup.classList.remove('active');
-    });
-
-    chatSendBtn.addEventListener('click', sendChatMessage);
-
-    chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            sendChatMessage();
-        }
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Initial Load
-    // ──────────────────────────────────────────────────────────────────────────
 
     console.log('🛒 Naheed Search ready! Type a query to begin.');
     console.log('📸 Images will be loaded from image_mapping.json');
