@@ -8,26 +8,24 @@ python-dotenv==1.0.0
 pandas==2.1.4
 numpy==1.26.2
 rank-bm25==0.2.2
-# Bumped from 2.2.2: bge-reranker-v2-m3 (CrossEncoder) and the LoRA-merged
-# model_run_6 checkpoint need a newer sentence-transformers/transformers
-# stack than 2.2.2 provides. This matches the environment the fine-tuning
-# notebooks actually ran on (sentence-transformers 5.4.1 / transformers 5.0.0),
-# so pin close to that rather than an old default.
+# Bumped from 2.2.2: bge-reranker-v2-m3 (CrossEncoder) and the fine-tuned
+# model_run_6 / muskannnnn/Prototype checkpoint need a newer
+# sentence-transformers/transformers stack than 2.2.2 provides. This matches
+# the environment the fine-tuning notebooks actually ran on
+# (sentence-transformers 5.4.1 / transformers 5.0.0), so pin close to that
+# rather than an old default.
+#
+# NOTE: this is only needed here for QUERY-time encoding (a single short
+# string per search request) and the optional cross-encoder reranker — bulk
+# corpus embedding generation now happens separately on Kaggle GPU, see
+# "Generating embeddings" in README.md.
 sentence-transformers>=2.7.0
 transformers>=4.41.0
 torch>=2.1.0
 
-# retrieval.py's query cache (TTLCache) — was missing from this list.
+# retrieval.py's query cache (TTLCache)
 cachetools==5.3.2
 
-# ── LLM Clients ───────────────────────────────────────────────────────────
-openai==1.3.7
-groq==0.5.0
-# llm_client.py does `from google import genai` — that's the NEW Google
-# GenAI SDK, package name "google-genai". The old "google-generativeai"
-# package (imported as `import google.generativeai as genai`) is a
-# DIFFERENT SDK with a different API and will NOT satisfy this import.
-google-genai>=0.3.0
-
-# ── Utilities ─────────────────────────────────────────────────────────────
-tqdm==4.66.1
+# urdu_normalizer.py's fuzzy roman-urdu/misspelling matching
+# (was missing from this list — required, not optional)
+rapidfuzz==3.6.1
