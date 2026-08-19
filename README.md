@@ -56,7 +56,6 @@ NaheedChatbot/
 │   └── config.py                    # single source of truth for paths/models/hyperparameters
 ├── testqueries.md                   # example queries used to sanity-check search
 ├── requirements.txt
-├── .env
 └── .gitignore
 ```
 
@@ -114,8 +113,7 @@ search request) │  api.py                                            │
    words / known misspellings in the query to their canonical English
    term (exact dictionary match, then a fuzzy fallback) before BM25/
    vector search run, so a query like `"kheema masala"` also matches
-   products indexed under `"qeema"`. See `testqueries.md` for the kind
-   of queries this is built to handle.
+   products indexed under `"qeema"`.
 5. **Hybrid retrieval** (`retrieval.py`) — the core pipeline:
    - Stage 1: BM25 + vector search run independently, then combined with
      **Weighted Reciprocal Rank Fusion (WRRF)**.
@@ -241,53 +239,68 @@ to use as-is; the steps below are what it does:
 
 1. Go to [kaggle.com](https://www.kaggle.com) → **New Notebook**.
 2. **Settings → Accelerator → GPU** (T4 x2 or P100).
-3. Upload `indexes/prototype/chunks.jsonl` as a Kaggle **Dataset** and
-   add it to the notebook's inputs (or copy its rows in directly).
+3. Upload `data/raw/final_products.csv` as a Kaggle **Dataset** and add it
+   to the notebook's inputs.
 4. Run:
 
 ```python
 !pip install -q sentence-transformers
 
 import json
+import pandas as pd
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
-CHUNKS_PATH = "/kaggle/input/<your-dataset-name>/chunks.jsonl"
-
-def load_chunks(path):
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-chunks = load_chunks(CHUNKS_PATH)
-ids = [c["id"] for c in chunks]
-texts = [c["text"] for c in chunks]
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Loads the fine-tuned model from the Hugging Face Hub —
 # https://huggingface.co/muskannnnn/Prototype
-model = SentenceTransformer("muskannnnn/Prototype", device="cuda")
+model = SentenceTransformer("muskannnnn/Prototype", device=device)
+
+CSV_PATH = "/kaggle/input/<your-dataset-name>/final_products.csv"
+df = pd.read_csv(CSV_PATH, low_memory=False)
+
+df["name"] = df["name"].fillna("")
+df["brand"] = df["brand"].fillna("")
+df["category_hierarchy"] = df["category_hierarchy"].fillna("").apply(lambda x: str(x).replace(">", " "))
+
+# Concise text only (name/brand/category, no description) — this is
+# deliberately different from chunking.py's richer BM25 text, to avoid
+# diluting the embedding.
+combined_texts = (
+    df["name"].astype(str) +
+    " | Brand: " + df["brand"].astype(str) +
+    " | Category: " + df["category_hierarchy"].astype(str)
+).tolist()
 
 embeddings = model.encode(
-    texts,
-    batch_size=64,
+    combined_texts,
+    batch_size=128,
     show_progress_bar=True,
-    normalize_embeddings=True,   # L2-normalize so dot product = cosine similarity
     convert_to_numpy=True,
+    normalize_embeddings=True,   # L2-normalize so dot product = cosine similarity
 ).astype(np.float32)
 
-np.save("embeddings.npy", embeddings)
-with open("embedding_ids.json", "w", encoding="utf-8") as f:
+# sku is the same id chunking.py uses, so this stays aligned with chunks.jsonl
+ids = df["sku"].astype(str).tolist()
+
+np.save("dataset_embeddings.npy", embeddings)
+with open("dataset_embedding_ids.json", "w", encoding="utf-8") as f:
     json.dump(ids, f, ensure_ascii=False)
 
 print(f"Saved {embeddings.shape[0]} embeddings of dim {embeddings.shape[1]}")
 ```
 
-5. Download `embeddings.npy` and `embedding_ids.json` from the notebook's
-   **Output** panel and place them in `indexes/prototype/`, replacing the
+5. Download `dataset_embeddings.npy` and `dataset_embedding_ids.json` from
+   the notebook's **Output** panel and place them in `indexes/prototype/`,
+   renamed to `embeddings.npy` and `embedding_ids.json`, replacing the
    existing files.
 
 `ids` must stay positionally aligned with the rows of `embeddings` —
 `retrieval.py` relies on that alignment (`embed_id_to_idx`), which is why
-the notebook builds both from the same `chunks` list in one pass.
+`ids` is built from the same `df`, in the same row order, right after
+`combined_texts`.
 
 `config.EMBEDDING_MODEL_NAME` (default `"muskannnnn/Prototype"`, loaded
 from the Hugging Face Hub) is the single place this repo id is set — the
