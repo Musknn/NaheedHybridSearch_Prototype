@@ -32,6 +32,13 @@ NaheedChatbot/
 │       ├── bm25_index.pkl           # built by bm25_index.py
 │       ├── embeddings.npy           # built on Kaggle GPU, see below
 │       └── embedding_ids.json       # positionally aligned with embeddings.npy
+├── finetuning/
+│   ├── Notebooks(Cleaned)/
+│   │   ├── Finetuning(cleaned).ipynb          # annotated fine-tuning code, explained step by step
+│   │   └── EmbeddingGeneration(cleaned).ipynb # annotated embedding-generation code
+│   └── Notebooks(Output)/
+│       ├── FineTuning.ipynb                   # original fine-tuning run, with its training output
+│       └── EmbeddingGeneration.ipynb          # original embedding-generation run, with its output
 ├── logs/
 │   └── pipeline_history.jsonl
 ├── models/
@@ -107,7 +114,8 @@ search request) │  api.py                                            │
    words / known misspellings in the query to their canonical English
    term (exact dictionary match, then a fuzzy fallback) before BM25/
    vector search run, so a query like `"kheema masala"` also matches
-   products indexed under `"qeema"`.
+   products indexed under `"qeema"`. See `testqueries.md` for the kind
+   of queries this is built to handle.
 5. **Hybrid retrieval** (`retrieval.py`) — the core pipeline:
    - Stage 1: BM25 + vector search run independently, then combined with
      **Weighted Reciprocal Rank Fusion (WRRF)**.
@@ -188,10 +196,48 @@ python -m http.server 5500
 # then open http://localhost:5500/index.html
 ```
 
+## Fine-tuning
+
+The embedding model (`muskannnnn/Prototype`, a fine-tuned `BAAI/bge-m3`) was
+arrived at in two stages:
+
+1. **Pilot, to check fine-tuning was worth doing at all.** Once the
+   prototype catalogue was narrowed down to 2,130 products, a small
+   500-product / 2,500-row subset was used first — 5 roman-urdu/misspelling
+   query variations per product — and 5 different LoRA hyperparameter
+   configurations (rank, learning rate, batch size, epoch count) were
+   trained and compared against a held-out eval set. This run showed a
+   clear MRR/Hit-rate gain over the base (non-fine-tuned) `bge-m3`, which is
+   what justified scaling up rather than shipping the base model as-is.
+2. **Full run, at scale.** The best-performing configuration from the pilot
+   was carried forward and re-trained on the full 10,640-pair /
+   6,245-unique-anchor dataset, covering all 2,130 products in the
+   prototype catalogue — this is the run that produced the checkpoint
+   uploaded to `muskannnnn/Prototype`.
+
+All four notebooks live under `finetuning/`:
+
+- **`Notebooks(Output)/FineTuning.ipynb`** and
+  **`Notebooks(Output)/EmbeddingGeneration.ipynb`** — the original notebooks
+  as actually run, output included (training logs, MRR/Hit-rate numbers,
+  embedding shapes).
+- **`Notebooks(Cleaned)/Finetuning(cleaned).ipynb`** — the same fine-tuning
+  code, with markdown explaining what each step is doing and why (LoRA
+  injection, the manual merge-after-`.fit()` step, the save-verification
+  checks, the MRR@20/Hit@20 evaluation methodology), so the training run can
+  be understood and replicated without reverse engineering the raw notebook.
+- **`Notebooks(Cleaned)/EmbeddingGeneration(cleaned).ipynb`** — a clean
+  notebook that (re-)generates `embeddings.npy` + `embedding_ids.json` from
+  `muskannnnn/Prototype` on the Hub. Use this whenever the catalogue or the
+  fine-tuned model changes — see the next section for the details of what
+  it does and where its output goes.
+
 ## Generating embeddings (Kaggle GPU)
 
 Encoding the full catalogue is too slow on CPU, so embedding generation
-runs as a Kaggle notebook rather than locally:
+runs as a Kaggle notebook rather than locally —
+`finetuning/Notebooks(Cleaned)/EmbeddingGeneration(cleaned).ipynb` is ready
+to use as-is; the steps below are what it does:
 
 1. Go to [kaggle.com](https://www.kaggle.com) → **New Notebook**.
 2. **Settings → Accelerator → GPU** (T4 x2 or P100).
@@ -271,7 +317,10 @@ API never accepts them as client-tunable knobs.
 
 `testqueries.md` is a running list of queries used to sanity-check
 search, mostly Roman-Urdu spellings, spelling variants of the same word,
-and a couple of full-sentence queries
+and a couple of full-sentence queries — the kind of input
+`urdu_normalizer.py` and the confidence filter are built to handle
+gracefully rather than returning nothing:
+
 ```
 lal lobia / laal lobiya      — same word, two spellings
 dar cheeni                   — cinnamon
